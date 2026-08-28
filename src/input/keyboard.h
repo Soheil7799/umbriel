@@ -30,6 +30,9 @@ namespace umbriel {
     // Lock the next XKB group in the keymap, wrapping at the end. False when the
     // keyboard has nothing to switch to (single-layout keymap, virtual keyboard).
     bool cycleLayout();
+    // Lock a specific XKB group. Used to hold every physical keyboard on the
+    // group the user actually typed in -- see notifyLayoutIfChanged().
+    void setLayout(xkb_layout_index_t group);
 
   private:
     static void onModifiers(wl_listener* listener, void* data);
