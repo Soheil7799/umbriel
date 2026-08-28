@@ -1061,6 +1061,18 @@ namespace umbriel {
     return switched;
   }
 
+  void Server::syncKeyboardLayout(uint32_t group, Keyboard* origin) {
+    // Keyboard::setLayout records the group before notifying, so the modifiers
+    // signal it dispatches re-enters notifyLayoutIfChanged, finds nothing
+    // changed, and stops there. No re-entrancy guard is needed here.
+    for (const auto& keyboard : m_keyboards) {
+      if (keyboard.get() == origin) {
+        continue;
+      }
+      keyboard->setLayout(group);
+    }
+  }
+
   std::optional<Server::KeyboardLayoutState> Server::keyboardLayoutState() const {
     for (const auto& keyboard : m_keyboards) {
       wlr_keyboard* wlrKeyboard = keyboard->wlr();

@@ -114,6 +114,28 @@ namespace umbriel {
     return effective == next;
   }
 
+  void Keyboard::setLayout(xkb_layout_index_t group) {
+    // Same exclusion as cycleLayout: a virtual keyboard's keymap belongs to its
+    // client and its groups are not ours to move.
+    if (m_virtual || m_keyboard->keymap == nullptr || m_keyboard->xkb_state == nullptr) {
+      return;
+    }
+    if (group >= xkb_keymap_num_layouts(m_keyboard->keymap)) {
+      return;
+    }
+    if (xkb_state_serialize_layout(m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE) == group) {
+      return;
+    }
+    // Assign BEFORE notifying. wlr_keyboard_notify_modifiers dispatches the
+    // modifiers signal synchronously, which re-enters notifyLayoutIfChanged on
+    // this keyboard; with the new group already recorded that call sees no
+    // change and returns, so this cannot recurse or emit a second IPC event.
+    m_lastNotifiedLayout = group;
+    wlr_keyboard_notify_modifiers(
+        m_keyboard, m_keyboard->modifiers.depressed, m_keyboard->modifiers.latched, m_keyboard->modifiers.locked, group
+    );
+  }
+
   void Keyboard::notifyLayoutIfChanged() {
     if (m_virtual || m_keyboard->keymap == nullptr || m_keyboard->xkb_state == nullptr) {
       return;
@@ -123,6 +145,20 @@ namespace umbriel {
       return;
     }
     m_lastNotifiedLayout = effective;
+    // Every wlr_keyboard carries its own xkb_state, so an XKB group toggle such
+    // as grp:alt_shift_toggle moves ONLY the device it was pressed on. A laptop
+    // enumerates several keyboards (power button, video bus, hotkeys...), so
+    // after one Alt+Shift the seat's keyboards disagree about the group. Two
+    // things break as a result:
+    //   * keyboardLayoutState() reports m_keyboards[0], which on this hardware
+    //     is a device that can never toggle, so the IPC keyboard_layout event
+    //     keeps reporting group 0 no matter what the user types in.
+    //   * cycleKeyboardLayout() rotates every keyboard by one, so the disagreement
+    //     is preserved rather than resolved and grows with each switch.
+    // Holding the whole seat on one group fixes both, and matches what clients
+    // already observe: wlr_seat forwards the modifiers of whichever keyboard was
+    // last used, not of the first one.
+    m_server->syncKeyboardLayout(effective, this);
     m_server->notifyKeyboardLayoutIpc();
   }
 

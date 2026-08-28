@@ -232,6 +232,12 @@ namespace umbriel {
     // Lock the next XKB group on every physical keyboard. False when no keyboard
     // has a second layout to switch to.
     bool cycleKeyboardLayout();
+    // Hold every physical keyboard except `origin` on `group`. Each wlr_keyboard
+    // owns its xkb_state, so an XKB group toggle (grp:alt_shift_toggle and
+    // friends) only moves the device it was pressed on; without this the seat's
+    // keyboards drift apart and keyboardLayoutState() reports a device nobody is
+    // typing in. See the comment in Keyboard::notifyLayoutIfChanged().
+    void syncKeyboardLayout(uint32_t group, Keyboard* origin);
 
     struct KeyboardLayoutState {
       std::vector<std::string> names;
