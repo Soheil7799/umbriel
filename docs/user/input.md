@@ -31,6 +31,7 @@ options = ""      # XKB options, comma-separated
 repeat_rate = 25  # 0-1000 Hz, 0 disables
 repeat_delay = 600 # 0-10000 ms
 numlock_toggle = true # true enables NumLock when a keyboard connects; false leaves it off
+track_layout = "global" # "global", or "window" to track the layout per surface
 ```
 
 `layout` takes a comma-separated list to load several layouts at once
@@ -50,6 +51,31 @@ options works (`grp:win_space_toggle`, `caps:escape`, `compose:ralt`, …). An
 `options` value XKB does not recognize is ignored silently, the same as with
 `setxkbmap`; a `layout` or `variant` that fails to compile is reported in the
 log and the whole keyboard block falls back to the system default.
+
+#### Tracking the layout per window
+
+With several layouts loaded, `track_layout` decides how far a layout change
+reaches.
+
+| Value | Behavior |
+|-------|----------|
+| `"global"` | A layout change applies to the whole session. This is the default. |
+| `"window"` | Each surface keeps its own layout. |
+
+Under `"window"`, the layout in use when a surface loses focus is stored against
+that surface and restored when it regains focus. A surface that has not been
+focused before starts from the **first layout in `layout`**, so a newly opened
+window does not inherit the layout of whatever was focused before it.
+
+The unit here is the surface, not the window, so layer-shell clients are covered
+too: opening a launcher while a window using the second layout is focused gives
+the launcher the first layout, because the launcher is a surface nobody has
+focused yet. Closing it returns focus, and its layout, to the window.
+
+This matters most when the layouts share nothing. Two Latin layouts differ by a
+few keys, but a Latin and a non-Latin layout share no characters at all, so
+writing in one application and typing commands in another means switching on
+every single change of focus unless the compositor remembers.
 
 ### Touchpad
 

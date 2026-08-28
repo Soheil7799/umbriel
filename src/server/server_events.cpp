@@ -1966,6 +1966,55 @@ namespace umbriel {
     }
   }
 
+  void Server::setKeyboardLayout(uint32_t group) {
+    syncKeyboardLayout(group, nullptr);
+    // Each setLayout() suppresses its own notification to avoid re-entering
+    // notifyLayoutIfChanged, so the event has to be sent once here instead.
+    notifyKeyboardLayoutIpc();
+  }
+
+  void Server::notifyKeyboardEnter(wlr_surface* surface) {
+    wlr_seat* seat = m_seat->wlr();
+
+    if (config().input.keyboard.trackLayout == TrackLayout::Window) {
+      if (const auto state = keyboardLayoutState()) {
+        // Save onto the surface losing focus before reading the incoming one, so
+        // a switch made while it was focused belongs to it.
+        m_surfaceLayouts.remember(seat->keyboard_state.focused_surface, state->currentIndex);
+        if (surface != nullptr) {
+          // A surface nobody has focused before starts from the first configured
+          // layout rather than inheriting whatever the last one was using. That
+          // is what keeps a launcher opened from a non-Latin window usable.
+          const xkb_layout_index_t target = m_surfaceLayouts.recall(surface, 0);
+          if (target != state->currentIndex) {
+            // Drop focus first so the outgoing client never receives a modifiers
+            // event carrying the incoming surface's group.
+            wlr_seat_keyboard_notify_clear_focus(seat);
+            setKeyboardLayout(target);
+          }
+        }
+      }
+    }
+
+    if (wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat)) {
+      wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
+    } else {
+      wlr_seat_keyboard_notify_enter(seat, surface, nullptr, 0, nullptr);
+    }
+  }
+
+  void Server::notifyKeyboardClearFocus() {
+    wlr_seat* seat = m_seat->wlr();
+    // Remember what the outgoing surface was using, but leave the active layout
+    // alone: with nothing focused there is no surface to take one from.
+    if (config().input.keyboard.trackLayout == TrackLayout::Window) {
+      if (const auto state = keyboardLayoutState()) {
+        m_surfaceLayouts.remember(seat->keyboard_state.focused_surface, state->currentIndex);
+      }
+    }
+    wlr_seat_keyboard_notify_clear_focus(seat);
+  }
+
   void Server::removeKeyboard(Keyboard* keyboard) {
     std::erase_if(m_keyboards, [keyboard](const std::unique_ptr<Keyboard>& entry) { return entry.get() == keyboard; });
     updateSeatCapabilities();
@@ -1997,7 +2046,7 @@ namespace umbriel {
       scheduleDisplacedViewRestore();
     }
     if (hadKeyboardFocus) {
-      wlr_seat_keyboard_notify_clear_focus(m_seat->wlr());
+      notifyKeyboardClearFocus();
       if (replacement != nullptr) {
         focusView(replacement);
       } else {

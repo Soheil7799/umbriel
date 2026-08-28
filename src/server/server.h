@@ -2,6 +2,7 @@
 #include "core/animation.h"
 #include "core/dirty.h"
 #include "input/modifier_tap.h"
+#include "input/surface_layouts.h"
 #include "scene/border_rect.h"
 #include "server/focus.h"
 #include "view/registry.h"
@@ -238,6 +239,15 @@ namespace umbriel {
     // keyboards drift apart and keyboardLayoutState() reports a device nobody is
     // typing in. See the comment in Keyboard::notifyLayoutIfChanged().
     void syncKeyboardLayout(uint32_t group, Keyboard* origin);
+    // Put the whole seat on `group` and tell IPC clients about it.
+    void setKeyboardLayout(uint32_t group);
+
+    // The one way keyboard focus reaches a surface. Toplevels, layer-shell
+    // surfaces and the lock screen all route through here so that
+    // input.keyboard.track_layout sees every focus change, not just the ones
+    // that involve a window.
+    void notifyKeyboardEnter(wlr_surface* surface);
+    void notifyKeyboardClearFocus();
 
     struct KeyboardLayoutState {
       std::vector<std::string> names;
@@ -589,6 +599,7 @@ namespace umbriel {
 
     std::vector<std::unique_ptr<Output>> m_outputs;
     std::vector<std::unique_ptr<Keyboard>> m_keyboards;
+    SurfaceLayoutMemory m_surfaceLayouts;
     ModifierTapState m_modifierTap;
     std::vector<std::unique_ptr<PointerDevice>> m_pointers;
     std::vector<std::unique_ptr<TouchDevice>> m_touchDevices;
