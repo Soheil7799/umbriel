@@ -1,8 +1,34 @@
 # Outputs
 
-Output sections configure individual monitors. Names must exactly match
-connector names such as `DP-1` or `HDMI-A-1`. Nested outputs use `WL-1`;
+Output sections configure individual monitors. A section is named either by
+connector or by monitor.
+
+A **connector** is `DP-1`, `HDMI-A-1` and so on. Nested outputs use `WL-1`;
 headless outputs use `HEADLESS-1`.
+
+A **monitor** is named `"<make> <model> <serial>"`, exactly as `umbriel outputs`
+reports it, with the literal `Unknown` for any field the display leaves empty:
+
+```toml
+[output."Microstep MSI G2712F CD6T084401192"]
+mode = "1920x1080@180"
+```
+
+Both forms are matched case-insensitively, and both work anywhere an output is
+named: output sections, `default_output` on a window rule, `map_to_output` on a
+tablet, `output` on a workspace rule, and the `:OUTPUT` suffix on actions such
+as `dpms-off` and `scratchpad-toggle`.
+
+Prefer the monitor form when a rule belongs to a particular display rather than
+to a particular port. A connector is a property of the machine, so a laptop used
+at two desks sees both monitors as `HDMI-A-1`, and a connector-keyed rule
+written for one silently applies to the other -- typically as a mode the second
+display cannot do, which it then rejects without saying why. Naming the monitor
+lets both rules coexist, each applying only when that display is attached.
+
+A display that reports no make, model or serial can only be named by its
+connector. It is not matched as `Unknown Unknown Unknown`, since every such
+output would answer to that.
 
 When an output is disconnected or disabled through configuration, Umbriel moves
 its windows to the active workspace on another enabled output, and moves them
@@ -16,7 +42,8 @@ continue to associate windows on inactive workspaces with the restored output
 without requiring each workspace to be visited. If no enabled output remains,
 windows stay without a workspace until one becomes available.
 
-Run `umbriel outputs` inside a session to list connector names and modes.
+Run `umbriel outputs` inside a session to list connector names, monitor
+names, and modes.
 
 ```toml
 [output.DP-1]

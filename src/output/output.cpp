@@ -6,6 +6,7 @@
 #include "layer/layer_surface.h"
 #include "output/frame_schedule.h"
 #include "output/hdr_format.h"
+#include "output/identity.h"
 #include "overview/overview.h"
 #include "scene/cheatsheet.h"
 #include "scene/config_banner.h"
@@ -29,15 +30,40 @@ namespace umbriel {
     constexpr Logger kLog("output");
     constexpr int kFrameRetryDelayMs = 16;
 
-    const OutputRule* findRule(const char* name) {
+    OutputIdentity identityOf(const wlr_output* output) {
+      const auto text = [](const char* value) {
+        return value != nullptr ? std::string_view(value) : std::string_view();
+      };
+      return OutputIdentity{
+          .connector = text(output->name),
+          .make = text(output->make),
+          .model = text(output->model),
+          .serial = text(output->serial),
+      };
+    }
+
+    // Rules are keyed either by connector or by "<make> <model> <serial>", so an
+    // output has to be matched on its whole identity rather than on its name.
+    const OutputRule* findRule(const wlr_output* output) {
+      if (output == nullptr) {
+        return nullptr;
+      }
+      const OutputIdentity identity = identityOf(output);
       for (const OutputRule& rule : config().outputs) {
-        if (rule.name == name) {
+        if (outputNameMatches(identity, rule.name)) {
           return &rule;
         }
       }
       return nullptr;
     }
   } // namespace
+
+  std::string Output::configName() const {
+    if (const OutputRule* rule = findRule(m_output); rule != nullptr) {
+      return rule->name;
+    }
+    return m_output->name != nullptr ? m_output->name : "output";
+  }
 
   Output::Output(Server& server, wlr_output* output)
       : m_server(&server), m_output(output), m_defaultScale(output->scale) {
@@ -82,7 +108,7 @@ namespace umbriel {
   }
 
   bool Output::configuredEnabled() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     return rule == nullptr || rule->enabled;
   }
 
@@ -105,7 +131,7 @@ namespace umbriel {
   }
 
   HdrMode Output::hdrMode() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     return rule != nullptr ? rule->hdr : HdrMode::Off;
   }
 
@@ -125,17 +151,17 @@ namespace umbriel {
   bool Output::hdrActive() const { return m_output->image_description != nullptr; }
 
   float Output::configuredSdrWhite() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     return rule != nullptr ? rule->sdrWhite : 203.0F;
   }
 
   bool Output::configuredDirectScanoutEnabled() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     return rule == nullptr || rule->directScanout;
   }
 
   bool Output::configuredTearingAllowed() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     return rule != nullptr && rule->allowTearing;
   }
 
@@ -226,7 +252,7 @@ namespace umbriel {
   }
 
   bool Output::applyConfiguredState() {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     const std::optional<double> configuredScale = rule != nullptr ? rule->scale : std::nullopt;
     const bool configured = configuredEnabled();
     const bool enabled = configured && !m_dpmsOff;
@@ -424,7 +450,7 @@ namespace umbriel {
   }
 
   bool Output::configuredVrrEnabled() const {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     const VrrMode outputMode = rule != nullptr ? rule->vrr : VrrMode::Disabled;
     const bool fullscreen = hasFullscreenView();
 
@@ -524,7 +550,7 @@ namespace umbriel {
   }
 
   wlr_output_layout_output* Output::addToLayout() {
-    const OutputRule* rule = findRule(m_output->name);
+    const OutputRule* rule = findRule(m_output);
     if (rule != nullptr && rule->position) {
       return wlr_output_layout_add(m_server->outputLayout(), m_output, (*rule->position)[0], (*rule->position)[1]);
     }

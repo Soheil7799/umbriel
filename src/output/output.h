@@ -40,6 +40,12 @@ namespace umbriel {
     Output& operator=(const Output&) = delete;
 
     [[nodiscard]] wlr_output* wlr() const { return m_output; }
+    // The name this output is known by in the config: the key of whichever
+    // [output.*] section matched it, or the connector when none did. Config is
+    // compared against config downstream (workspace rules resolve against the
+    // section keys), so passing this rather than the raw connector is what lets
+    // a rule keyed by "<make> <model> <serial>" own its workspaces too.
+    [[nodiscard]] std::string configName() const;
     [[nodiscard]] wlr_scene_output* sceneOutput() const { return m_sceneOutput; }
     [[nodiscard]] wlr_scene_tree* layerTree(uint32_t layer) const;
     [[nodiscard]] wlr_scene_tree* popupTree() const { return m_popupTree; }

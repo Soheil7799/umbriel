@@ -1114,8 +1114,8 @@ namespace umbriel {
     m_handle->data = this;
     wlr_ext_workspace_group_handle_v1_output_enter(m_handle, m_output->wlr());
 
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
-    auto resolved = resolveWorkspacesForOutput(config(), outputName);
+    const std::string outputName = m_output->configName();
+    auto resolved = resolveWorkspacesForOutput(config(), outputName.c_str());
     m_dynamic = resolved.dynamic;
     const size_t count = resolved.workspaces.size();
     m_workspaces.reserve(count);
@@ -1146,9 +1146,9 @@ namespace umbriel {
   }
   std::unique_ptr<Workspace> WorkspaceGroup::createConfiguredWorkspace(ResolvedWorkspace workspace, size_t index) {
     wlr_ext_workspace_manager_v1* manager = m_server->workspaceManager();
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
+    const std::string outputName = m_output->configName();
     char id[64];
-    std::snprintf(id, sizeof(id), "%s:%u", outputName, m_nextHandleSerial++);
+    std::snprintf(id, sizeof(id), "%s:%u", outputName.c_str(), m_nextHandleSerial++);
     wlr_ext_workspace_handle_v1* handle = wlr_ext_workspace_handle_v1_create(manager, id, kWorkspaceCaps);
     return std::make_unique<Workspace>(
         *this, handle, id, std::move(workspace.name), index, std::move(workspace.layout)
@@ -1158,8 +1158,8 @@ namespace umbriel {
   Workspace* WorkspaceGroup::appendDynamicWorkspace() {
     const size_t index = m_workspaces.size();
     std::string name = std::to_string(index + 1);
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName, name, index);
+    const std::string outputName = m_output->configName();
+    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName.c_str(), name, index);
     auto workspace = createConfiguredWorkspace({std::move(name), std::move(layout)}, index);
     Workspace* result = workspace.get();
     m_workspaces.push_back(std::move(workspace));
@@ -1177,10 +1177,10 @@ namespace umbriel {
   }
 
   void WorkspaceGroup::refreshDynamicWorkspaceMetadata() {
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
+    const std::string outputName = m_output->configName();
     for (size_t index = 0; index < m_workspaces.size(); ++index) {
       const std::string name = std::to_string(index + 1);
-      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName, name, index);
+      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName.c_str(), name, index);
       Workspace* workspace = m_workspaces[index].get();
       // Keep a runtime layout switch across structural changes to a dynamic
       // group, while allowing numeric workspace rules to follow the new index.
@@ -1205,8 +1205,8 @@ namespace umbriel {
     }
     index = std::min(index, m_workspaces.size());
     const std::string name = std::to_string(index + 1);
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
-    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName, name, index);
+    const std::string outputName = m_output->configName();
+    ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName.c_str(), name, index);
     auto workspace = createConfiguredWorkspace({name, std::move(layout)}, index);
     Workspace* result = workspace.get();
     m_workspaces.insert(m_workspaces.begin() + static_cast<std::ptrdiff_t>(index), std::move(workspace));
@@ -1258,8 +1258,8 @@ namespace umbriel {
 
   void WorkspaceGroup::reconcileInventory() {
     slideFinish();
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
-    auto resolvedSet = resolveWorkspacesForOutput(config(), outputName);
+    const std::string outputName = m_output->configName();
+    auto resolvedSet = resolveWorkspacesForOutput(config(), outputName.c_str());
     m_dynamic = resolvedSet.dynamic;
 
     if (m_dynamic) {
@@ -1340,12 +1340,13 @@ namespace umbriel {
   }
 
   void WorkspaceGroup::refreshLayouts() {
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
+    const std::string outputName = m_output->configName();
     for (const auto& workspace : m_workspaces) {
       // A config reload reasserts the configured mode, dropping any runtime
       // workspace-set-layout override.
       workspace->clearLayoutModeOverride();
-      ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), outputName, workspace->name(), workspace->index());
+      ResolvedLayoutConfig layout =
+          resolveWorkspaceLayout(config(), outputName.c_str(), workspace->name(), workspace->index());
       if (workspace->layoutConfig() != layout) {
         workspace->applyLayoutConfig(std::move(layout));
       }
@@ -1671,9 +1672,9 @@ namespace umbriel {
 
     wlr_ext_workspace_manager_v1* manager = m_server->workspaceManager();
     const size_t index = m_workspaces.size();
-    const char* outputName = m_output->wlr()->name != nullptr ? m_output->wlr()->name : "output";
+    const std::string outputName = m_output->configName();
     char id[64];
-    std::snprintf(id, sizeof(id), "%s:%u", outputName, m_nextHandleSerial++);
+    std::snprintf(id, sizeof(id), "%s:%u", outputName.c_str(), m_nextHandleSerial++);
     std::string wsName = (name != nullptr && name[0] != '\0') ? name : std::to_string(index + 1);
     wlr_ext_workspace_handle_v1* handle = wlr_ext_workspace_handle_v1_create(manager, id, kWorkspaceCaps);
     m_workspaces.push_back(
