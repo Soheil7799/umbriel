@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <sys/types.h>
 #include <utility>
 #include <vector>
@@ -24,6 +25,7 @@ struct wlr_backend;
 struct wlr_box;
 struct wlr_compositor;
 struct wlr_color_manager_v1;
+struct wlr_content_type_manager_v1;
 struct wlr_image_description_v1_data;
 struct wlr_ext_foreign_toplevel_handle_v1;
 struct wlr_ext_foreign_toplevel_list_v1;
@@ -45,6 +47,7 @@ struct wlr_scene_buffer;
 struct wlr_scene_output_layout;
 struct wlr_scene_rect;
 struct wlr_scene_tree;
+struct wlr_security_context_manager_v1;
 struct wlr_session;
 struct wlr_session_lock_manager_v1;
 struct wlr_session_lock_v1;
@@ -59,6 +62,7 @@ struct wlr_xdg_activation_v1;
 struct wlr_xdg_activation_token_v1;
 struct wlr_xdg_decoration_manager_v1;
 struct wlr_xdg_shell;
+struct wlr_xdg_toplevel_tag_manager_v1;
 struct wlr_server_decoration_manager;
 struct wlr_ext_workspace_group_handle_v1;
 struct wlr_ext_workspace_handle_v1;
@@ -72,6 +76,7 @@ struct wlr_virtual_pointer_manager_v1;
 struct wlr_virtual_pointer_v1;
 
 namespace umbriel {
+  enum class ContentType;
   struct ConfigEffects;
 
   // Slow tick that ferries wl_surface.frame callbacks to toplevels that are mapped but not on the active workspace.
@@ -128,6 +133,8 @@ namespace umbriel {
     [[nodiscard]] wlr_renderer* renderer() const { return m_renderer; }
     [[nodiscard]] wlr_allocator* allocator() const { return m_allocator; }
     [[nodiscard]] wlr_scene* scene() const { return m_scene; }
+    [[nodiscard]] ContentType surfaceContentType(wlr_surface* surface) const;
+    [[nodiscard]] bool clientHasSecurityContext(const wl_client* client) const;
     [[nodiscard]] wlr_color_manager_v1* colorManager() const { return m_colorManager; }
     [[nodiscard]] wlr_export_dmabuf_manager_v1* exportDmabufManager() const { return m_exportDmabufManager; }
     [[nodiscard]] wlr_tearing_control_manager_v1* tearingControlManager() const { return m_tearingControlManager; }
@@ -225,27 +232,21 @@ namespace umbriel {
     void relayoutBanner();
     void relayoutCheatsheet();
     void relayoutQuitConfirm();
-    void spawn(const char* command, const char* description = nullptr);
+    void spawn(const char* command, const char* description = nullptr, bool withActivationToken = false);
     void handleConfigReload();
     // Re-evaluate application idle inhibitors after a surface's presentation
     // visibility changes.
     void updateIdleInhibit();
-    // Lock the next XKB group on every physical keyboard. False when no keyboard
-    // has a second layout to switch to.
+    // Lock the next group on one physical keyboard, then synchronize matching
+    // named layouts across the remaining keyboards.
     bool cycleKeyboardLayout();
-    // Hold every physical keyboard except `origin` on `group`. Each wlr_keyboard
-    // owns its xkb_state, so an XKB group toggle (grp:alt_shift_toggle and
-    // friends) only moves the device it was pressed on; without this the seat's
-    // keyboards drift apart and keyboardLayoutState() reports a device nobody is
-    // typing in. See the comment in Keyboard::notifyLayoutIfChanged().
-    void syncKeyboardLayout(uint32_t group, Keyboard* origin);
-    // Put the whole seat on `group` and tell IPC clients about it.
-    void setKeyboardLayout(uint32_t group);
+    // A physical keyboard changed groups through real input. It becomes the
+    // canonical source for IPC state and compatible keyboard synchronization.
+    void keyboardLayoutChanged(Keyboard* origin);
 
     // The one way keyboard focus reaches a surface. Toplevels, layer-shell
     // surfaces and the lock screen all route through here so that
-    // input.keyboard.track_layout sees every focus change, not just the ones
-    // that involve a window.
+    // input.keyboard.track_layout sees every focus change.
     void notifyKeyboardEnter(wlr_surface* surface);
     void notifyKeyboardClearFocus();
 
@@ -253,11 +254,9 @@ namespace umbriel {
       std::vector<std::string> names;
       uint32_t currentIndex = 0;
     };
-    // The layout names and effective group index of the first physical keyboard, the same device keyboardLayoutState
-    // callers observe cycling. Nullopt when no physical keyboard exists.
+    // The canonical physical keyboard's layout vocabulary and effective group.
+    // Nullopt when no configured physical keyboard exists.
     [[nodiscard]] std::optional<KeyboardLayoutState> keyboardLayoutState() const;
-    // Fires the IPC keyboard-layout event when the effective group of a physical keyboard actually changed. Config
-    // reloads re-send the current state even when the group did not move.
     void notifyKeyboardLayoutIpc();
     void notifyOverviewChanged();
     // Coalesced windows-event notification: at most one idle callback per frame
@@ -346,6 +345,7 @@ namespace umbriel {
     static void onNewOutput(wl_listener* listener, void* data);
     static void onNewInput(wl_listener* listener, void* data);
     static void onNewXdgToplevel(wl_listener* listener, void* data);
+    static void onSetXdgToplevelTag(wl_listener* listener, void* data);
     static void onNewXdgPopup(wl_listener* listener, void* data);
     static void onNewXdgDecoration(wl_listener* listener, void* data);
     static void onNewLayerSurface(wl_listener* listener, void* data);
@@ -379,8 +379,13 @@ namespace umbriel {
     static void onIpcWindowsIdle(void* data);
     static void onDisplacedRestoreIdle(void* data);
 
+    void trackActivationToken(wlr_xdg_activation_token_v1* token, bool compositorIssued);
+
     void addOutput(wlr_output* output);
     void addKeyboard(wlr_input_device* device);
+    void syncKeyboardLayout(Keyboard* source);
+    // Restore a remembered named layout through a compatible physical keyboard.
+    bool setKeyboardLayout(std::string_view layout);
     void addPointer(wlr_input_device* device);
     void addTouch(wlr_input_device* device);
     struct TabletDevice {
@@ -444,6 +449,7 @@ namespace umbriel {
     };
     struct ActivationTokenWatch {
       std::chrono::steady_clock::time_point createdAt;
+      bool compositorIssued = false;
       wl_listener destroy{};
     };
 
@@ -456,9 +462,12 @@ namespace umbriel {
     wlr_output_layout* m_outputLayout = nullptr;
     wlr_scene* m_scene = nullptr;
     wlr_color_manager_v1* m_colorManager = nullptr;
+    wlr_content_type_manager_v1* m_contentTypeManager = nullptr;
+    wlr_security_context_manager_v1* m_securityContextManager = nullptr;
     std::unique_ptr<WineColorManager> m_wineColorManager;
     wlr_scene_output_layout* m_sceneLayout = nullptr;
     wlr_xdg_shell* m_xdgShell = nullptr;
+    wlr_xdg_toplevel_tag_manager_v1* m_xdgToplevelTagManager = nullptr;
     wlr_xdg_decoration_manager_v1* m_xdgDecorationManager = nullptr;
     wlr_server_decoration_manager* m_serverDecorationManager = nullptr;
     wlr_layer_shell_v1* m_layerShell = nullptr;
@@ -578,6 +587,7 @@ namespace umbriel {
     wl_listener m_newOutput{};
     wl_listener m_newInput{};
     wl_listener m_newXdgToplevel{};
+    wl_listener m_setXdgToplevelTag{};
     wl_listener m_newXdgPopup{};
     wl_listener m_newXdgDecoration{};
     wl_listener m_newLayerSurface{};
@@ -600,6 +610,7 @@ namespace umbriel {
     std::vector<std::unique_ptr<Output>> m_outputs;
     std::vector<std::unique_ptr<Keyboard>> m_keyboards;
     SurfaceLayoutMemory m_surfaceLayouts;
+    Keyboard* m_keyboardLayoutSource = nullptr;
     ModifierTapState m_modifierTap;
     std::vector<std::unique_ptr<PointerDevice>> m_pointers;
     std::vector<std::unique_ptr<TouchDevice>> m_touchDevices;

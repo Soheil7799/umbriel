@@ -46,6 +46,14 @@ layout = "us,de"
 options = "grp:alt_shift_toggle"
 ```
 
+Physical keyboards that share a named layout stay on that layout together,
+whether the change comes from an XKB toggle or `keyboard-layout-next`. Device
+overrides may list layouts in a different order: Umbriel matches them by XKB
+name, and leaves a keyboard unchanged when it does not provide the selected
+layout. IPC reports the layout vocabulary of the keyboard that most recently
+changed groups. Connecting another keyboard adopts that selected layout when
+available and does not reset the existing keyboards.
+
 `options` is passed to XKB verbatim, so anything `xkbcli list` reports under
 options works (`grp:win_space_toggle`, `caps:escape`, `compose:ralt`, …). An
 `options` value XKB does not recognize is ignored silently, the same as with
@@ -62,15 +70,17 @@ reaches.
 | `"global"` | A layout change applies to the whole session. This is the default. |
 | `"window"` | Each surface keeps its own layout. |
 
-Under `"window"`, the layout in use when a surface loses focus is stored against
-that surface and restored when it regains focus. A surface that has not been
-focused before starts from the **first layout in `layout`**, so a newly opened
-window does not inherit the layout of whatever was focused before it.
+Under `"window"`, the named layout in use when a surface loses focus is stored
+against that surface and restored when it regains focus. Matching by XKB name
+keeps device overrides with differently ordered layout lists consistent. A
+surface that has not been focused before starts from the canonical keyboard's
+first layout, so it does not inherit the layout of the previous surface.
 
 The unit here is the surface, not the window, so layer-shell clients are covered
-too: opening a launcher while a window using the second layout is focused gives
-the launcher the first layout, because the launcher is a surface nobody has
-focused yet. Closing it returns focus, and its layout, to the window.
+too. Opening a launcher while a window using the second layout is focused gives
+the new launcher the first layout. Closing it returns focus, and its remembered
+layout, to the window. Reloading input configuration rebuilds the physical
+keymaps and clears remembered surface layouts.
 
 This matters most when the layouts share nothing. Two Latin layouts differ by a
 few keys, but a Latin and a non-Latin layout share no characters at all, so

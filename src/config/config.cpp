@@ -93,6 +93,23 @@ namespace umbriel {
       return std::nullopt;
     }
 
+    std::optional<ContentType> readContentType(const toml::node& node) {
+      const auto value = node.value<std::string>();
+      if (value == "none") {
+        return ContentType::None;
+      }
+      if (value == "photo") {
+        return ContentType::Photo;
+      }
+      if (value == "video") {
+        return ContentType::Video;
+      }
+      if (value == "game") {
+        return ContentType::Game;
+      }
+      return std::nullopt;
+    }
+
     void emitDiag(ConfigDiagnostic::Severity severity, const toml::source_region* src, std::string msg) {
       ConfigDiagnostic diag;
       diag.severity = severity;
@@ -383,14 +400,16 @@ namespace umbriel {
               }
               sc.boolean("expand_single_column", overrides.scrolling.expandSingleColumn);
               sc.real("default_width_fraction", 0.1, 1.0, overrides.scrolling.defaultWidthFraction)
-                  .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip);
+                  .boolean("center_underfull_strip", overrides.scrolling.centerUnderfullStrip)
+                  .boolean("center_focused", overrides.scrolling.centerFocused);
             });
             s.sub("dwindle", [&](Section& sd) { sd.boolean("preserve_split", overrides.dwindle.preserveSplit); });
             s.sub("master", [&](Section& sm) {
               if (const auto position = readMasterPosition(sm, layoutContext + ".master")) {
                 overrides.master.position = position;
               }
-              sm.real("default_width_fraction", 0.1, 0.9, overrides.master.defaultWidthFraction);
+              sm.real("default_width_fraction", 0.1, 0.9, overrides.master.defaultWidthFraction)
+                  .boolean("new_on_top", overrides.master.newOnTop);
             });
           },
           layoutContext
@@ -913,14 +932,16 @@ namespace umbriel {
           }
           sc.boolean("expand_single_column", loaded.layout.scrolling.expandSingleColumn);
           sc.real("default_width_fraction", 0.1, 1.0, loaded.layout.scrolling.defaultWidthFraction)
-              .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip);
+              .boolean("center_underfull_strip", loaded.layout.scrolling.centerUnderfullStrip)
+              .boolean("center_focused", loaded.layout.scrolling.centerFocused);
         });
         s.sub("dwindle", [&](Section& sd) { sd.boolean("preserve_split", loaded.layout.dwindle.preserveSplit); });
         s.sub("master", [&](Section& sm) {
           if (const auto position = readMasterPosition(sm, "layout.master")) {
             loaded.layout.master.position = *position;
           }
-          sm.real("default_width_fraction", 0.1, 0.9, loaded.layout.master.defaultWidthFraction);
+          sm.real("default_width_fraction", 0.1, 0.9, loaded.layout.master.defaultWidthFraction)
+              .boolean("new_on_top", loaded.layout.master.newOnTop);
         });
       });
     }
@@ -1459,6 +1480,7 @@ namespace umbriel {
         Section keys(*section, "window_rule", configStore().mutableDiagnostics());
 
         WindowRule rule;
+        bool valid = true;
 
         if (const toml::node* matchNode = keys.take("match")) {
           if (const auto* match = matchNode->as_table()) {
@@ -1470,10 +1492,11 @@ namespace umbriel {
                   rule.appIdRegex = std::regex(rule.appIdPattern);
                 } catch (const std::regex_error& error) {
                   warnAt(appIdNode->source(), "invalid regex in window_rule.match.app_id: {}", error.what());
-                  continue;
+                  valid = false;
                 }
               } else {
                 warnAt(appIdNode->source(), "ignoring window_rule.match.app_id (expected string)");
+                valid = false;
               }
             }
             if (const toml::node* titleNode = matchKeys.take("title")) {
@@ -1483,10 +1506,36 @@ namespace umbriel {
                   rule.titleRegex = std::regex(rule.titlePattern);
                 } catch (const std::regex_error& error) {
                   warnAt(titleNode->source(), "invalid regex in window_rule.match.title: {}", error.what());
-                  continue;
+                  valid = false;
                 }
               } else {
                 warnAt(titleNode->source(), "ignoring window_rule.match.title (expected string)");
+                valid = false;
+              }
+            }
+            if (const toml::node* xdgTagNode = matchKeys.take("xdg_tag")) {
+              if (const auto value = xdgTagNode->value<std::string>()) {
+                rule.xdgTagPattern = *value;
+                try {
+                  rule.xdgTagRegex = std::regex(rule.xdgTagPattern);
+                } catch (const std::regex_error& error) {
+                  warnAt(xdgTagNode->source(), "invalid regex in window_rule.match.xdg_tag: {}", error.what());
+                  valid = false;
+                }
+              } else {
+                warnAt(xdgTagNode->source(), "ignoring window_rule.match.xdg_tag (expected string)");
+                valid = false;
+              }
+            }
+            if (const toml::node* contentTypeNode = matchKeys.take("content_type")) {
+              if (const auto value = readContentType(*contentTypeNode)) {
+                rule.matchContentType = value;
+              } else {
+                warnAt(
+                    contentTypeNode->source(),
+                    "ignoring window_rule.match.content_type (expected none|photo|video|game)"
+                );
+                valid = false;
               }
             }
             if (const toml::node* focusedNode = matchKeys.take("is_focused")) {
@@ -1494,10 +1543,12 @@ namespace umbriel {
                 rule.matchFocused = focusedNode->value<bool>();
               } else {
                 warnAt(focusedNode->source(), "ignoring window_rule.match.is_focused (expected boolean)");
+                valid = false;
               }
             }
           } else {
             warnAt(matchNode->source(), "ignoring window_rule.match (expected table)");
+            valid = false;
           }
         }
 
@@ -1626,6 +1677,19 @@ namespace umbriel {
           }
         }
 
+        if (const toml::node* n = keys.take("default_height")) {
+          const auto value = n->value<double>();
+          if (!value || std::isnan(*value)) {
+            warnAt(n->source(), "ignoring window_rule.default_height (expected number 0.1-1.0)");
+          } else {
+            const double used = std::clamp(*value, 0.1, 1.0);
+            if (used != *value) {
+              warnAt(n->source(), "window_rule.default_height = {} out of range, clamped to {}", *value, used);
+            }
+            rule.defaultHeight = used;
+          }
+        }
+
         if (const toml::node* n = keys.take("default_workspace")) {
           const auto value = n->value<std::int64_t>();
           if (!value || *value < 1 || *value > static_cast<std::int64_t>(kMaxWorkspaces)) {
@@ -1635,7 +1699,9 @@ namespace umbriel {
           }
         }
 
-        loaded.windowRules.push_back(std::move(rule));
+        if (valid) {
+          loaded.windowRules.push_back(std::move(rule));
+        }
       }
     }
 

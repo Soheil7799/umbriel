@@ -1,26 +1,21 @@
 #pragma once
 
-#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <wayland-server-core.h>
-#include <xkbcommon/xkbcommon.h>
 
 struct wlr_surface;
 
 namespace umbriel {
 
-  // Which XKB group each keyboard-focusable surface was last using, for
-  // input.keyboard.track_layout = "window".
+  // The named XKB layout last used by each keyboard-focusable surface when
+  // input.keyboard.track_layout is "window".
   //
-  // Keyed on the SURFACE rather than on a View. That is the whole reason the
-  // feature behaves correctly for layer-shell clients: a launcher or a lock
-  // screen takes keyboard focus without ever being a toplevel, and keying on
-  // windows would leave those inheriting whatever the last window used. A
-  // surface nobody has focused yet has no entry, which is what lets a newly
-  // opened surface start from the configured default instead of inheriting.
-  //
-  // Entries free themselves through the surface's own destroy signal, the same
-  // arrangement wine_color_manager uses for its per-surface state.
+  // Keyed on the surface rather than on a View so layer-shell and lock-screen
+  // clients receive the same behavior as toplevels. Entries remove themselves
+  // through the surface destroy signal.
   class SurfaceLayoutMemory {
   public:
     SurfaceLayoutMemory() = default;
@@ -29,18 +24,17 @@ namespace umbriel {
     SurfaceLayoutMemory(const SurfaceLayoutMemory&) = delete;
     SurfaceLayoutMemory& operator=(const SurfaceLayoutMemory&) = delete;
 
-    void remember(wlr_surface* surface, xkb_layout_index_t layout);
-    // The layout stored for `surface`, or `fallback` when it has never held
-    // focus. A null surface also yields `fallback`.
-    [[nodiscard]] xkb_layout_index_t recall(wlr_surface* surface, xkb_layout_index_t fallback) const;
+    void remember(wlr_surface* surface, std::string_view layout);
+    [[nodiscard]] std::optional<std::string_view> recall(wlr_surface* surface) const;
     void forget(wlr_surface* surface);
+    void clear();
     [[nodiscard]] size_t size() const { return m_entries.size(); }
 
   private:
     struct Entry {
       SurfaceLayoutMemory* owner = nullptr;
       wlr_surface* surface = nullptr;
-      xkb_layout_index_t layout = 0;
+      std::string layout;
       wl_listener destroy{};
     };
 

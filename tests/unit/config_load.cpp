@@ -12,9 +12,11 @@
 
 using umbriel::ConfigDiagnostic;
 using umbriel::ConfigStore;
+using umbriel::ContentType;
 using umbriel::HdrMode;
 using umbriel::LayoutMode;
 using umbriel::ModifierKey;
+using umbriel::TrackLayout;
 using umbriel::VrrMode;
 
 namespace {
@@ -217,6 +219,7 @@ mode = "master"
 [layout.master]
 position = "right"
 default_width_fraction = 0.05
+new_on_top = false
 surprise = true
 
 [output.DP-1]
@@ -228,6 +231,7 @@ name = "dev"
 [workspace.layout.master]
 position = "left"
 default_width_fraction = 0.7
+new_on_top = true
 )");
 
   ConfigStore& store = umbriel::configStore();
@@ -238,10 +242,12 @@ default_width_fraction = 0.7
   CHECK(store.config().layout.mode == LayoutMode::Master);
   CHECK(store.config().layout.master.position == umbriel::MasterPosition::Right);
   CHECK_EQ(store.config().layout.master.defaultWidthFraction, 0.1);
+  CHECK(!store.config().layout.master.newOnTop);
   CHECK_EQ(store.config().workspaceRules.size(), size_t{1});
   CHECK(store.config().workspaceRules[0].layout.master.position == umbriel::MasterPosition::Left);
   CHECK(store.config().workspaceRules[0].layout.master.defaultWidthFraction.has_value());
   CHECK_EQ(*store.config().workspaceRules[0].layout.master.defaultWidthFraction, 0.7);
+  CHECK(store.config().workspaceRules[0].layout.master.newOnTop == true);
   CHECK(containsDiagnostic(store, "layout.master.default_width_fraction = 0.05 out of range, clamped to 0.1"));
   CHECK(containsDiagnostic(store, "unknown key layout.master.surprise"));
 }
@@ -637,6 +643,80 @@ UMBRIEL_TEST(windowOutputPoliciesLoadAndRejectInvalidValues) {
   CHECK(containsDiagnostic(store, "ignoring window_rule.hdr"));
 }
 
+UMBRIEL_TEST(windowContentTypeMatcherLoadsFixedVocabulary) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  const auto checkValue = [&](const std::string& value, ContentType expected) {
+    file.write("[[window_rule]]\nmatch.content_type = \"" + value + "\"\nopacity = 0.9\n");
+    CHECK(store.reload().success);
+    CHECK_EQ(store.config().windowRules.size(), size_t{1});
+    CHECK(store.config().windowRules[0].matchContentType == expected);
+    CHECK(!containsDiagnostic(store, "unknown key window_rule.match.content_type"));
+  };
+  checkValue("none", ContentType::None);
+  checkValue("photo", ContentType::Photo);
+  checkValue("video", ContentType::Video);
+  checkValue("game", ContentType::Game);
+
+  file.write("[[window_rule]]\nopacity = 0.9\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(!store.config().windowRules[0].matchContentType);
+
+  file.write("[[window_rule]]\nmatch.content_type = 42\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.match.content_type (expected none|photo|video|game)"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.opacity"));
+
+  file.write("[[window_rule]]\nmatch.content_type = \"stream\"\nmatch.is_focused = true\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.match.content_type (expected none|photo|video|game)"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.match.is_focused"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.opacity"));
+
+  file.write("[[window_rule]]\nmatch.content_type = \"Game\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.match.content_type (expected none|photo|video|game)"));
+}
+
+UMBRIEL_TEST(windowXdgTagMatcherLoadsRegexAndRejectsInvalidValues) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[[window_rule]]\nmatch.xdg_tag = \"^(game-launcher|game-running)$\"\nopacity = 0.9\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK_EQ(store.config().windowRules[0].xdgTagPattern, std::string("^(game-launcher|game-running)$"));
+  CHECK(std::regex_search("game-launcher", store.config().windowRules[0].xdgTagRegex));
+  CHECK(std::regex_search("game-running", store.config().windowRules[0].xdgTagRegex));
+  CHECK(!std::regex_search("game-settings", store.config().windowRules[0].xdgTagRegex));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.match.xdg_tag"));
+
+  file.write("[[window_rule]]\nopacity = 0.9\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].xdgTagPattern.empty());
+
+  file.write("[[window_rule]]\nmatch.xdg_tag = 42\nmatch.is_focused = true\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(containsDiagnostic(store, "ignoring window_rule.match.xdg_tag (expected string)"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.match.is_focused"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.opacity"));
+
+  file.write("[[window_rule]]\nmatch.xdg_tag = \"[\"\nopacity = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(containsDiagnostic(store, "invalid regex in window_rule.match.xdg_tag"));
+  CHECK(!containsDiagnostic(store, "unknown key window_rule.opacity"));
+}
+
 UMBRIEL_TEST(windowTearingOverrideLoadsAsAnOptionalBoolean) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
@@ -659,6 +739,35 @@ UMBRIEL_TEST(windowTearingOverrideLoadsAsAnOptionalBoolean) {
   CHECK(store.reload().success);
   CHECK(!store.config().windowRules[0].allowTearing);
   CHECK(containsDiagnostic(store, "ignoring window_rule.tearing (expected boolean)"));
+}
+
+UMBRIEL_TEST(windowRuleFractionSizingLoadsAndClamps) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(
+      "[[window_rule]]\nmatch.app_id = \"^utility$\"\ndefault_floating = true\ndefault_width = 0.5\ndefault_height = "
+      "0.6\n"
+  );
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  CHECK(store.config().windowRules[0].defaultWidth && *store.config().windowRules[0].defaultWidth == 0.5);
+  CHECK(store.config().windowRules[0].defaultHeight && *store.config().windowRules[0].defaultHeight == 0.6);
+
+  // Out-of-range fractions clamp into [0.1, 1.0] with a diagnostic, like default_width.
+  file.write("[[window_rule]]\ndefault_width = 3.0\ndefault_height = 0.01\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules[0].defaultWidth && *store.config().windowRules[0].defaultWidth == 1.0);
+  CHECK(store.config().windowRules[0].defaultHeight && *store.config().windowRules[0].defaultHeight == 0.1);
+  CHECK(containsDiagnostic(store, "window_rule.default_width = 3 out of range, clamped to 1"));
+  CHECK(containsDiagnostic(store, "window_rule.default_height = 0.01 out of range, clamped to 0.1"));
+
+  // Non-numeric values are ignored with a diagnostic.
+  file.write("[[window_rule]]\ndefault_height = \"half\"\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().windowRules[0].defaultHeight);
+  CHECK(containsDiagnostic(store, "ignoring window_rule.default_height (expected number 0.1-1.0)"));
 }
 
 UMBRIEL_TEST(outputEnabledFlagParsesAndDefaultsTrue) {
@@ -1029,6 +1138,22 @@ options = "grp:win_space_toggle"
     CHECK(device->layout == std::optional<std::string>("us,fr"));
     CHECK(device->options == std::optional<std::string>("grp:win_space_toggle"));
   }
+}
+
+UMBRIEL_TEST(keyboardTrackLayoutLoadsAndRejectsUnknownValues) {
+  const TempConfig file;
+  file.write("[input.keyboard]\ntrack_layout = \"window\"\n");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().input.keyboard.trackLayout, TrackLayout::Window);
+  CHECK(!containsDiagnostic(store, "unknown key input.keyboard.track_layout"));
+
+  file.write("[input.keyboard]\ntrack_layout = \"surface\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().input.keyboard.trackLayout, TrackLayout::Global);
+  CHECK(containsDiagnostic(store, "expected global|window"));
 }
 
 UMBRIEL_TEST(tabletConfigLoads) {

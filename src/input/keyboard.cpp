@@ -3,6 +3,7 @@
 #include "config/config.h"
 #include "core/log.h"
 #include "input/cursor.h"
+#include "input/keyboard_layout.h"
 #include "input/seat.h"
 #include "input/shortcut_keysym.h"
 #include "input/text_input.h"
@@ -39,17 +40,6 @@ namespace umbriel {
     wl_signal_add(&m_keyboard->events.key, &m_key);
     m_destroy.notify = onDestroy;
     wl_signal_add(&device->events.destroy, &m_destroy);
-
-    // A virtual keyboard is announced before its client necessarily provides a
-    // keymap. Do not replace a usable keyboard already on the seat with that
-    // incomplete device; its first modifiers or key event selects it below. An
-    // empty seat still has to take it: keyboard focus enter and the
-    // input-method grab keymap both read the seat's current keyboard, so a
-    // session whose only keyboards are virtual would never focus or type.
-    wlr_seat* seat = m_server->seat()->wlr();
-    if (!m_virtual || wlr_seat_get_keyboard(seat) == nullptr) {
-      wlr_seat_set_keyboard(seat, m_keyboard);
-    }
   }
   void Keyboard::applyConfig() {
     cancelRepeat();
@@ -84,9 +74,11 @@ namespace umbriel {
       xkb_context_unref(context);
     }
     wlr_keyboard_set_repeat_info(m_keyboard, repeatRate, repeatDelay);
-    // The name list or keymap changed; resend the current state so consumers
-    // observe the reload even when the effective group did not move.
-    notifyLayoutIfChanged();
+    // A new keymap starts in group zero. Record it without treating initial
+    // setup or a config reload as a user-driven layout transition.
+    m_lastNotifiedLayout = m_keyboard->xkb_state == nullptr
+        ? XKB_LAYOUT_INVALID
+        : xkb_state_serialize_layout(m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
   }
 
   bool Keyboard::cycleLayout() {
@@ -114,26 +106,53 @@ namespace umbriel {
     return effective == next;
   }
 
-  void Keyboard::setLayout(xkb_layout_index_t group) {
-    // Same exclusion as cycleLayout: a virtual keyboard's keymap belongs to its
-    // client and its groups are not ours to move.
+  void Keyboard::syncLayoutFrom(const Keyboard& source) {
+    if (m_virtual
+        || m_keyboard->keymap == nullptr
+        || m_keyboard->xkb_state == nullptr
+        || source.m_virtual
+        || source.m_keyboard->keymap == nullptr
+        || source.m_keyboard->xkb_state == nullptr) {
+      return;
+    }
+    const xkb_layout_index_t sourceGroup =
+        xkb_state_serialize_layout(source.m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+    const std::optional<xkb_layout_index_t> targetGroup =
+        matchingLayoutGroup(m_keyboard->keymap, source.m_keyboard->keymap, sourceGroup);
+    if (targetGroup.has_value()) {
+      setLayout(*targetGroup);
+    }
+  }
+
+  bool Keyboard::setLayoutByName(std::string_view name) {
     if (m_virtual || m_keyboard->keymap == nullptr || m_keyboard->xkb_state == nullptr) {
+      return false;
+    }
+    const std::optional<xkb_layout_index_t> group = layoutGroupNamed(m_keyboard->keymap, name);
+    if (!group.has_value()) {
+      return false;
+    }
+    setLayout(*group);
+    return true;
+  }
+
+  void Keyboard::setLayout(xkb_layout_index_t group) {
+    if (m_virtual
+        || m_keyboard->keymap == nullptr
+        || m_keyboard->xkb_state == nullptr
+        || group >= xkb_keymap_num_layouts(m_keyboard->keymap)
+        || xkb_state_serialize_layout(m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE) == group) {
       return;
     }
-    if (group >= xkb_keymap_num_layouts(m_keyboard->keymap)) {
-      return;
-    }
-    if (xkb_state_serialize_layout(m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE) == group) {
-      return;
-    }
-    // Assign BEFORE notifying. wlr_keyboard_notify_modifiers dispatches the
-    // modifiers signal synchronously, which re-enters notifyLayoutIfChanged on
-    // this keyboard; with the new group already recorded that call sees no
-    // change and returns, so this cannot recurse or emit a second IPC event.
-    m_lastNotifiedLayout = group;
+    // wlroots emits the modifiers signal synchronously. Keep this synthetic
+    // update away from the seat and input-method paths, which must continue to
+    // describe the keyboard that produced the real input event.
+    m_syncingLayout = true;
     wlr_keyboard_notify_modifiers(
         m_keyboard, m_keyboard->modifiers.depressed, m_keyboard->modifiers.latched, m_keyboard->modifiers.locked, group
     );
+    m_syncingLayout = false;
+    m_lastNotifiedLayout = xkb_state_serialize_layout(m_keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
   }
 
   void Keyboard::notifyLayoutIfChanged() {
@@ -145,21 +164,7 @@ namespace umbriel {
       return;
     }
     m_lastNotifiedLayout = effective;
-    // Every wlr_keyboard carries its own xkb_state, so an XKB group toggle such
-    // as grp:alt_shift_toggle moves ONLY the device it was pressed on. A laptop
-    // enumerates several keyboards (power button, video bus, hotkeys...), so
-    // after one Alt+Shift the seat's keyboards disagree about the group. Two
-    // things break as a result:
-    //   * keyboardLayoutState() reports m_keyboards[0], which on this hardware
-    //     is a device that can never toggle, so the IPC keyboard_layout event
-    //     keeps reporting group 0 no matter what the user types in.
-    //   * cycleKeyboardLayout() rotates every keyboard by one, so the disagreement
-    //     is preserved rather than resolved and grows with each switch.
-    // Holding the whole seat on one group fixes both, and matches what clients
-    // already observe: wlr_seat forwards the modifiers of whichever keyboard was
-    // last used, not of the first one.
-    m_server->syncKeyboardLayout(effective, this);
-    m_server->notifyKeyboardLayoutIpc();
+    m_server->keyboardLayoutChanged(this);
   }
 
   wlr_input_method_keyboard_grab_v2* Keyboard::activeInputMethodGrab() const {
@@ -200,9 +205,24 @@ namespace umbriel {
   }
 
   void Keyboard::handleModifiers() {
+    wlr_seat* seat = m_server->seat()->wlr();
+    if (m_syncingLayout) {
+      // A config reload can remap the seat's current keyboard to a differently
+      // ordered matching group. Forward that current state, but never select or
+      // forward a sibling keyboard merely because it was synchronized.
+      if (wlr_seat_get_keyboard(seat) == m_keyboard) {
+        wlr_input_method_keyboard_grab_v2* grab = activeInputMethodGrab();
+        if (grab != nullptr) {
+          wlr_input_method_keyboard_grab_v2_set_keyboard(grab, m_keyboard);
+          wlr_input_method_keyboard_grab_v2_send_modifiers(grab, &m_keyboard->modifiers);
+        } else {
+          wlr_seat_keyboard_notify_modifiers(seat, &m_keyboard->modifiers);
+        }
+      }
+      return;
+    }
     cancelRepeat();
     m_server->notifyIdleActivity();
-    wlr_seat* seat = m_server->seat()->wlr();
     wlr_input_method_keyboard_grab_v2* grab = activeInputMethodGrab();
     if (grab != nullptr) {
       wlr_input_method_keyboard_grab_v2_set_keyboard(grab, m_keyboard);

@@ -16,7 +16,7 @@ autostart = []
 # mod_key = "Super"            # Mod in keybinds; defaults to Super (Alt when nested)
 xwayland = true                # requires restart to change
 show_cheatsheet = true         # show keybinds overlay on startup
-focus_on_activate = false      # activation requests mark urgent without stealing focus
+focus_on_activate = false      # unsolicited activation marks urgent; spawn launches may still focus
 honor_restored_maximize = false # let apps restore their saved maximized state
 
 # Applied only at session startup. Native sessions also publish these values to
@@ -176,13 +176,14 @@ action = "spawn:notify-send 'Bottom right'"
 mode = "scrolling"             # "scrolling", "dwindle", or "master"
 # Inspect every workspace's effective mode with `umbriel workspaces --json`.
 gap = 8                        # 0-500
-width_presets = [0.333, 0.5, 0.667] # shared by scrolling, dwindle, and master
+width_presets = [0.333, 0.5, 0.667] # width and height cycling, tiled and floating alike
 
 [layout.scrolling]
 # Vertical workspaces stack horizontal lanes from top to bottom.
 # direction = "horizontal"
 default_width_fraction = 0.5  # remove to let clients choose their initial width
 center_underfull_strip = true  # center the strip whenever it is narrower than the viewport
+center_focused = false # always center the focused column
 expand_single_column = true # fill lone column to viewport width
 
 
@@ -192,6 +193,7 @@ expand_single_column = true # fill lone column to viewport width
 [layout.master]
 position = "left"              # "left" or "right"
 default_width_fraction = 0.55  # 0.1-0.9
+new_on_top = true             # place new windows at the top of the stack
 
 # Workspace layout overrides (see docs/user/workspaces.md#workspace-rules)
 # [[workspace]]
@@ -340,8 +342,12 @@ follows_mouse = false
 # "Mod+Ctrl+O" = "dpms-off:DP-1"   # stays off while another display is awake
 # "Mod+Minus" = "window-modify-width:-0.1"
 # "Mod+Alt+Minus" = "window-modify-height:-0.1"
+# "Mod+R" = "window-cycle-width"
+# "Mod+Shift+R" = "window-cycle-width-back"
+# "Mod+Alt+R" = "window-cycle-height"
+# "Mod+Alt+Shift+R" = "window-cycle-height-back"
 # "Mod+Grave" = "window-focus-last"
-# "Mod+BackSpace" = "window-consume-or-expel"
+# "Mod+BackSpace" = "window-consume-or-expel-left"
 # "Mod+C" = "column-center"
 # "Mod+Shift+C" = "window-center"
 # "Mod+Shift+T" = "workspace-set-layout:toggle"
@@ -363,10 +369,25 @@ follows_mouse = false
 blur = true
 blur_optimized = true
 
+# Open an app maximized while keeping its parented dialogs at their natural size
+# [[window_rule]]
+# match.app_id = "^example-app$"
+# default_maximize = true
+
 # Open a specific app maximized to the usable-area edges (no gaps or borders)
 # [[window_rule]]
 # match.app_id = "^discord$"
 # default_maximize_to_edges = true
+
+# Match a standardized surface content hint
+# [[window_rule]]
+# match.content_type = "game"
+# vrr = "always"
+
+# Match a client-defined XDG toplevel tag, such as Proton-EM's game tag
+# [[window_rule]]
+# match.xdg_tag = "^proton-game$"
+# default_fullscreen = true
 
 [[window_rule]]
 match.app_id = "^dev.noctalia.Noctalia$"
@@ -377,6 +398,14 @@ default_size = [1020, 900]
 match.app_id = "^dev.noctalia.UmbrielSharePicker$"
 default_floating = true
 default_size = [800, 600]
+
+# Size a float as fractions of the usable area instead of pixels, so the rule
+# suits any monitor. default_size wins on both axes when it is also set.
+# [[window_rule]]
+# match.app_id = "^org[.]example[.]Utility$"
+# default_floating = true
+# default_width = 0.5             # initial width as a fraction of the usable area
+# default_height = 0.6            # initial height as a fraction of the usable area
 
 # [[window_rule]]
 # match.app_id = "firefox"

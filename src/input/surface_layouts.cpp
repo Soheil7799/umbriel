@@ -4,11 +4,7 @@
 
 namespace umbriel {
 
-  SurfaceLayoutMemory::~SurfaceLayoutMemory() {
-    while (!m_entries.empty()) {
-      destroyEntry(m_entries.begin()->second);
-    }
-  }
+  SurfaceLayoutMemory::~SurfaceLayoutMemory() { clear(); }
 
   void SurfaceLayoutMemory::destroyEntry(Entry* entry) {
     wl_list_remove(&entry->destroy.link);
@@ -22,8 +18,8 @@ namespace umbriel {
     destroyEntry(entry);
   }
 
-  void SurfaceLayoutMemory::remember(wlr_surface* surface, xkb_layout_index_t layout) {
-    if (surface == nullptr) {
+  void SurfaceLayoutMemory::remember(wlr_surface* surface, std::string_view layout) {
+    if (surface == nullptr || layout.empty()) {
       return;
     }
     const auto existing = m_entries.find(surface);
@@ -31,18 +27,18 @@ namespace umbriel {
       existing->second->layout = layout;
       return;
     }
-    auto* entry = new Entry{.owner = this, .surface = surface, .layout = layout, .destroy = {}};
+    auto* entry = new Entry{.owner = this, .surface = surface, .layout = std::string(layout), .destroy = {}};
     entry->destroy.notify = onSurfaceDestroy;
     wl_signal_add(&surface->events.destroy, &entry->destroy);
     m_entries.emplace(surface, entry);
   }
 
-  xkb_layout_index_t SurfaceLayoutMemory::recall(wlr_surface* surface, xkb_layout_index_t fallback) const {
+  std::optional<std::string_view> SurfaceLayoutMemory::recall(wlr_surface* surface) const {
     if (surface == nullptr) {
-      return fallback;
+      return std::nullopt;
     }
     const auto found = m_entries.find(surface);
-    return found == m_entries.end() ? fallback : found->second->layout;
+    return found == m_entries.end() ? std::nullopt : std::optional<std::string_view>{found->second->layout};
   }
 
   void SurfaceLayoutMemory::forget(wlr_surface* surface) {
@@ -52,6 +48,12 @@ namespace umbriel {
     const auto found = m_entries.find(surface);
     if (found != m_entries.end()) {
       destroyEntry(found->second);
+    }
+  }
+
+  void SurfaceLayoutMemory::clear() {
+    while (!m_entries.empty()) {
+      destroyEntry(m_entries.begin()->second);
     }
   }
 

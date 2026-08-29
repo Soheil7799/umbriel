@@ -102,13 +102,14 @@ namespace umbriel {
     bool moveFocusedColumn(int direction);
     bool moveFocusedColumnFirst();
     bool moveFocusedColumnLast();
-    bool consumeFocusedLeft();
-    bool expelFocusedRight();
+    bool consumeFocused(int direction);
+    bool expelFocused(int direction);
     bool moveFocusedVertical(int direction);
     bool swapFocusedInCycle(int direction);
     bool increaseMasterCount();
     bool decreaseMasterCount();
     bool cycleFocusedWidth(int direction);
+    bool cycleFocusedHeight(int direction);
     bool setFocusedWidth(double fraction);
     bool centerFocusedColumn();
     // Incremental width change: apply `delta` to the focused column's current
@@ -138,6 +139,12 @@ namespace umbriel {
     void applyPositions(bool animate);
     [[nodiscard]] wlr_box tiledTargetBox(const View* view, const wlr_box& usable) const;
     [[nodiscard]] int layoutAttachIndex(const View* view) const;
+    // Resize the focused floating window by usable-area fractions; an axis
+    // without a fraction keeps its current basis size. False when no float is
+    // focused or the usable area is degenerate.
+    bool resizeFocusedFloating(const std::optional<double>& widthFrac, const std::optional<double>& heightFrac);
+    // The focused floating window's size as a fraction of the usable axis; nullopt when unavailable.
+    [[nodiscard]] std::optional<double> focusedFloatingFraction(bool width) const;
     // Pull the scroll offset back into [0, maxScroll]. Only for removals: a
     // touchpad swipe overscrolls on purpose.
     void clampScrollToRange();

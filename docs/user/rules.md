@@ -2,9 +2,11 @@
 
 ## Window Rules
 
-Window rules match `app_id`, title, or focus state using ECMAScript regular
-expressions. Every matching rule contributes its settings. If two rules set
-the same field, the rule that appears later in the file takes precedence.
+Window rules can match `app_id`, title, and a client-defined XDG toplevel tag
+using ECMAScript regular expressions. They can also match a standardized
+content type or focus state. Every matching rule contributes its settings. If
+two rules set the same field, the rule that appears later in the file takes
+precedence.
 
 ```toml
 [[window_rule]]
@@ -19,16 +21,32 @@ default_floating = true
 |----------|------|-------------|
 | `match.app_id` | regex | Match the window's app ID. |
 | `match.title` | regex | Match the window's title. |
+| `match.xdg_tag` | regex | Match the client-defined XDG toplevel tag. |
+| `match.content_type` | string | Match `"none"`, `"photo"`, `"video"`, or `"game"`. |
 | `match.is_focused` | bool | Match the window's focused state dynamically. |
 
 Every selector is optional. A rule without selectors matches every window.
 Regular expressions match any part of a value by default. Use `^` and `$` when
 you need to match the entire value.
 
-Run `umbriel windows` to list the app IDs of open windows. Windows translated
-through Umbriel's managed `xwayland-satellite` are prefixed with `[Xwayland]`.
-The JSON form, `umbriel windows --json`, reports the same distinction through
-the boolean `xwayland` field.
+Run `umbriel windows` to inspect open windows. Its human-readable output adds
+suffixes such as `[xdg_tag=proton-game]` and `[content_type=game]` when those
+values are present. The JSON form, `umbriel windows --json`, always reports
+`xdg_tag` and `content_type`, and also includes the `xwayland` boolean.
+
+An XDG toplevel tag is one client-defined string, not a fixed vocabulary. A
+client can set it before the window opens and replace it later if the window's
+purpose changes. The initial tag participates in opening settings. Later
+replacements refresh settings from the dynamic table below, but never replay
+opening settings. Windows with no tag, or an empty tag, do not match an
+`xdg_tag` selector.
+
+Umbriel derives a window's content type from standardized Wayland hints on its
+XDG root surface and visible subsurfaces. When those hints differ, it uses the
+priority `game`, `video`, `photo`, then `none`. This also covers Proton and Wine
+games that publish the hint on a child surface. `none` includes windows that do
+not publish a content hint. Client changes refresh settings from the dynamic
+table below, but never replay the opening settings.
 
 ### Settings applied when a window opens
 
@@ -41,13 +59,14 @@ opening settings do not overwrite user changes made in the meantime.
 |-----|------|-------------|
 | `default_output` | string | Open on a specific output (e.g. `"DP-1"`). |
 | `default_floating` | bool | Force floating (`true`) or force tiling (`false`). |
-| `default_size` | `[w, h]` | Initial size in pixels, clamped to the client's min/max hints. Floats use both, then own their size and honor client resizes; tiled windows ignore height. |
+| `default_size` | `[w, h]` | Initial size in pixels, clamped to the client's min/max hints. Floats use both, then own their size and honor client resizes; tiled windows ignore height. Takes precedence over `default_width`/`default_height` when set. |
 | `default_position` | table | Initial position for floating windows: `{ x = int, y = int, anchor = string }`. Ignored for tiled windows. |
-| `default_width` | float | Scrolling only. Lane scroll-axis extent fraction (0.1-1.0), which is height on a vertical workspace. Gap-aware: fractions that sum to 1 tile exactly. Overrides `layout.scrolling.default_width_fraction`. Dragging the lane within or between scrolling workspaces retains its current fraction. Ignored in dwindle and master. |
+| `default_width` | float | For floating windows, the initial width as a fraction (0.1-1.0) of the usable area. This includes windows that float without `default_floating`, such as dialogs that declare a parent. For tiled windows, scrolling only: lane scroll-axis extent fraction (0.1-1.0), which is height on a vertical workspace. Gap-aware: fractions that sum to 1 tile exactly. Overrides `layout.scrolling.default_width_fraction`. Dragging the lane within or between scrolling workspaces retains its current fraction. Ignored in dwindle and master. |
+| `default_height` | float | Floating windows only, on the same terms as `default_width`. Initial height as a fraction (0.1-1.0) of the usable area. Ignored for tiled windows. |
 | `default_workspace` | int | Place on workspace N from 1 to 64. On dynamic outputs, values beyond the current count clamp to the last workspace. |
 | `default_fullscreen` | bool | Open in fullscreen. |
 | `default_maximize_to_edges` | bool | Explicitly open maximized to edges. The initial configure fills the usable area without gaps or borders, so the window does not open at its normal size first. Layer-shell exclusive zones stay visible. Takes precedence over `default_maximize`; when combined with `default_fullscreen` the window opens fullscreen and returns to maximized to edges once fullscreen is cleared. |
-| `default_maximize` | bool | Explicitly open maximized. The initial configure uses the layout's final full-width target, so the window does not open at its normal size first. Umbriel ignores client maximization requested before the first buffer maps unless `general.honor_restored_maximize` is enabled, but always honors requests sent after mapping. Tiled windows expand their column to full width without changing the layout; floating windows fill the usable area. |
+| `default_maximize` | bool | Explicitly open maximized. Parented transient dialogs keep their natural size. The initial configure uses the layout's final full-width target, so the window does not open at its normal size first. Umbriel ignores client maximization requested before the first buffer maps unless `general.honor_restored_maximize` is enabled, but always honors requests sent after mapping. Tiled windows expand their column to full width without changing the layout; floating windows fill the usable area. |
 | `default_focused` | bool | Take focus when opening, switching to the window's workspace when needed. Defaults to `true`; set to `false` to preserve the existing focus and workspace. |
 | `default_pinned` | bool | Open pinned above regular windows and keep the window visible across workspace changes. Pinning makes a tiled window floating. |
 
@@ -79,6 +98,17 @@ default_size = [800, 600]
 default_position = { x = 32, y = 24, anchor = "bottom_left" }
 ```
 
+Floating windows can instead be sized as fractions of the usable area, per
+axis. `default_size` (pixels) wins when both are set:
+
+```toml
+[[window_rule]]
+match.app_id = "^org[.]example[.]Utility$"
+default_floating = true
+default_width = 0.5
+default_height = 0.6
+```
+
 `anchor` defaults to `"center"`, so this centers a floating window exactly:
 
 ```toml
@@ -92,6 +122,30 @@ anchors measure `y` upward from the bottom edge. The single-edge anchors center
 the window on the other axis. Umbriel keeps part of the window visible if an
 offset would otherwise place it completely off-screen.
 
+#### Floating size
+
+`default_size` sizes a float in pixels. `default_width` and `default_height`
+size it as fractions of the output's usable area instead, so one rule suits any
+monitor. The axes are independent: an axis without a fraction keeps the size the
+client asked for. Both are clamped to the client's min/max hints.
+
+```toml
+[[window_rule]]
+match.app_id = "^org[.]example[.]Utility$"
+default_floating = true
+default_width = 0.5
+default_height = 0.6
+```
+
+`default_size` wins on both axes when it is set as well.
+
+Fractions reach every floating window the rule matches, not only windows the
+rule floats with `default_floating`. A window that floats because it declares a
+parent, such as a dialog, or because it fixes its size through min/max hints,
+takes the fraction too. Dialogs usually share their application's `app_id`, so a
+`default_width` written for scrolling lane widths also sizes that application's
+dialogs. Match on `title` or `xdg_tag` to keep a rule off them.
+
 ### Settings updated while a window is open
 
 | Key | Type | Description |
@@ -101,7 +155,7 @@ offset would otherwise place it completely off-screen.
 | `blur_popups` | bool | Enable/disable blur for its XDG popups. |
 | `blur_ignore_alpha` | float | Skip blur where surface alpha is below this threshold (0.0-1.0). Applies to the window and its popups. |
 | `blur_optimized` | bool | Override `appearance.blur.optimized` for this window. |
-| `focus_on_activate` | bool | Override `general.focus_on_activate` for activation requests targeting this window. `false` marks it urgent without focusing or switching workspaces. |
+| `focus_on_activate` | bool | Override `general.focus_on_activate` for activation requests targeting this window, including compositor-issued `spawn:` tokens. `false` marks it urgent without focusing or switching workspaces. |
 | `vrr` | string | Override the focused window's output VRR policy: `"disabled"`, `"always"`, or `"fullscreen"`. Without this key, the output's configured `vrr` policy applies. |
 | `tearing` | bool | Override the client's tearing hint. Omit it to follow the hint, set `true` to request asynchronous presentation, or set `false` to veto it. The output must still opt in with `tearing = true`, and the window must be fullscreen. |
 | `hdr` | string | Override the focused window's output HDR policy: `"off"`, `"on"`, `"auto"`, or `"fullscreen"`. Without this key, the output's configured `hdr` policy applies. This does not assign HDR metadata to the surface. |
@@ -114,7 +168,8 @@ offset would otherwise place it completely off-screen.
 blur = true
 blur_optimized = true
 
-# Narrow columns for terminals and file managers
+# Narrow columns for terminals and file managers. These fractions also size any
+# floating window these applications open, including their dialogs.
 [[window_rule]]
 match.app_id = "^(Alacritty|kitty|org\\.gnome\\.Nautilus)$"
 default_width = 0.33
@@ -124,10 +179,15 @@ default_width = 0.33
 match.app_id = "^(helium|chromium)$"
 default_width = 0.75
 
-# Always use VRR while a game is focused, even when the output policy disables it
+# Always use VRR for game content, even when the output policy disables it
 [[window_rule]]
-match.app_id = "^(steam_app_[0-9]+|gamescope)$"
+match.content_type = "game"
 vrr = "always"
+
+# Match a client-defined tag. Proton-EM uses proton-game for game windows.
+[[window_rule]]
+match.xdg_tag = "^proton-game$"
+default_fullscreen = true
 
 # Activate the HDR output while a matching fullscreen game is focused
 [[window_rule]]
