@@ -98,8 +98,8 @@ Other output and layout settings are refreshed during a reload as well.
 dynamic output. They change layout settings but do not create workspaces.
 
 Each rule selects a workspace by exactly one of `name` (string) or `index`
-(1-based integer from 1 to 64). An optional `output` restricts the rule to that
-output.
+(1-based integer from 1 to 64). An optional `output` restricts the rule to a
+case-insensitive connector or monitor name from `umbriel outputs`.
 
 ### How settings are combined
 
@@ -118,7 +118,7 @@ and numbered positions as those workspaces are created or removed.
 |-----|------|-------------|
 | `name` | string | Select by workspace name (mutually exclusive with `index`). |
 | `index` | int | Select by 1-based position from 1 to 64 (mutually exclusive with `name`). |
-| `output` | string | Restrict to this output. |
+| `output` | string | Restrict to a connector or monitor name. |
 | `layout.mode` | string | `"scrolling"`, `"dwindle"`, or `"master"`. |
 | `layout.gap` | int | Gap in pixels (0-500). |
 | `layout.width_presets` | float array | Widths used by the width-cycle action in every layout. |

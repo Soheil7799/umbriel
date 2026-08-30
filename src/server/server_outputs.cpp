@@ -126,16 +126,7 @@ namespace umbriel {
     for (const auto& entry : m_outputs) {
       // Disabled outputs are off the desktop: rules and keybinds must not be
       // able to address them, or windows and focus would land on a blank screen.
-      if (entry->wlr()->enabled
-          && outputNameMatches(
-              OutputIdentity{
-                  .connector = entry->wlr()->name != nullptr ? entry->wlr()->name : "",
-                  .make = entry->wlr()->make != nullptr ? entry->wlr()->make : "",
-                  .model = entry->wlr()->model != nullptr ? entry->wlr()->model : "",
-                  .serial = entry->wlr()->serial != nullptr ? entry->wlr()->serial : "",
-              },
-              name
-          )) {
+      if (entry->wlr()->enabled && outputNameMatch(entry->identity(), name) != OutputNameMatch::None) {
         return entry.get();
       }
     }

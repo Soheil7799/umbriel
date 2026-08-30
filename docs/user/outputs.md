@@ -6,8 +6,9 @@ connector or by monitor.
 A **connector** is `DP-1`, `HDMI-A-1` and so on. Nested outputs use `WL-1`;
 headless outputs use `HEADLESS-1`.
 
-A **monitor** is named `"<make> <model> <serial>"`, exactly as `umbriel outputs`
-reports it, with the literal `Unknown` for any field the display leaves empty:
+A **monitor** name is `"<make> <model> <serial>"`, shown by `umbriel outputs`
+as `Config name`, with the literal `Unknown` for any field the display leaves
+empty:
 
 ```toml
 [output."Microstep MSI G2712F CD6T084401192"]
@@ -22,13 +23,19 @@ as `dpms-off` and `scratchpad-toggle`.
 Prefer the monitor form when a rule belongs to a particular display rather than
 to a particular port. A connector is a property of the machine, so a laptop used
 at two desks sees both monitors as `HDMI-A-1`, and a connector-keyed rule
-written for one silently applies to the other -- typically as a mode the second
-display cannot do, which it then rejects without saying why. Naming the monitor
-lets both rules coexist, each applying only when that display is attached.
+written for one silently applies to the other, typically as a mode the second
+display cannot do. Naming the monitor lets both rules coexist, each applying
+only when that display is attached.
+
+When connector and monitor output sections both match, the monitor section
+wins. This allows a connector section to provide a port-specific fallback while
+a monitor section overrides it for a known display.
 
 A display that reports no make, model or serial can only be named by its
 connector. It is not matched as `Unknown Unknown Unknown`, since every such
-output would answer to that.
+output would answer to that. Two displays that report the same make, model, and
+serial also share a monitor name; use their distinct connectors when both are
+connected.
 
 When an output is disconnected or disabled through configuration, Umbriel moves
 its windows to the active workspace on another enabled output, and moves them
@@ -42,8 +49,8 @@ continue to associate windows on inactive workspaces with the restored output
 without requiring each workspace to be visited. If no enabled output remains,
 windows stay without a workspace until one becomes available.
 
-Run `umbriel outputs` inside a session to list connector names, monitor
-names, and modes.
+Run `umbriel outputs` inside a session to list connector names, copyable monitor
+configuration names, and modes.
 
 ```toml
 [output.DP-1]
@@ -271,8 +278,8 @@ settings. Only the config file can disable an output; see below.
 
 Use `dpms-off` and `dpms-on` to power configured monitors off and on without
 removing them from the output layout or moving their workspaces and windows.
-The bare actions target every configured output. Add a connector name to target
-one monitor:
+The bare actions target every configured output. Add a connector or monitor
+name to target one monitor:
 
 ```sh
 umbriel msg dpms-off

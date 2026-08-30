@@ -203,8 +203,8 @@ default_width_fraction = 0.55  # 0.1-0.9
 
 # Outputs (see docs/user/outputs.md) ----------------------------------------
 
-# Named by connector, or by "<make> <model> <serial>" as `umbriel outputs`
-# reports it. The second form follows the monitor between machines and ports:
+# Named by connector, or by the `Config name` printed by `umbriel outputs`.
+# The monitor form follows the display between machines and ports:
 # [output."Some Make Some Model ABC123"]
 # [output."DP-1"]
 # mode = "2560x1440@144"

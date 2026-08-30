@@ -6,42 +6,60 @@ namespace umbriel {
     constexpr std::string_view kUnknown = "Unknown";
 
     char lowerAscii(char value) { return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value; }
+    std::string_view orUnknown(std::string_view value) { return value.empty() ? kUnknown : value; }
 
-    bool equalsIgnoreCase(std::string_view left, std::string_view right) {
-      if (left.size() != right.size()) {
+    bool descriptorEquals(const OutputIdentity& identity, std::string_view configured) {
+      const std::string_view make = orUnknown(identity.make);
+      const std::string_view model = orUnknown(identity.model);
+      const std::string_view serial = orUnknown(identity.serial);
+      if (configured.size() != make.size() + model.size() + serial.size() + 2) {
         return false;
       }
-      for (size_t index = 0; index < left.size(); ++index) {
-        if (lowerAscii(left[index]) != lowerAscii(right[index])) {
-          return false;
-        }
-      }
-      return true;
+      const size_t modelOffset = make.size() + 1;
+      const size_t serialOffset = modelOffset + model.size() + 1;
+      return configured[make.size()] == ' '
+          && configured[serialOffset - 1] == ' '
+          && outputNamesEqual(configured.substr(0, make.size()), make)
+          && outputNamesEqual(configured.substr(modelOffset, model.size()), model)
+          && outputNamesEqual(configured.substr(serialOffset), serial);
     }
 
-    std::string_view orUnknown(std::string_view value) { return value.empty() ? kUnknown : value; }
   } // namespace
 
+  bool outputNamesEqual(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+      return false;
+    }
+    for (size_t index = 0; index < left.size(); ++index) {
+      if (lowerAscii(left[index]) != lowerAscii(right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   std::string outputDescriptor(const OutputIdentity& identity) {
+    const std::string_view make = orUnknown(identity.make);
+    const std::string_view model = orUnknown(identity.model);
+    const std::string_view serial = orUnknown(identity.serial);
     std::string descriptor;
-    descriptor.append(orUnknown(identity.make));
+    descriptor.reserve(make.size() + model.size() + serial.size() + 2);
+    descriptor.append(make);
     descriptor.push_back(' ');
-    descriptor.append(orUnknown(identity.model));
+    descriptor.append(model);
     descriptor.push_back(' ');
-    descriptor.append(orUnknown(identity.serial));
+    descriptor.append(serial);
     return descriptor;
   }
 
-  bool outputNameMatches(const OutputIdentity& identity, std::string_view configured) {
-    if (!identity.connector.empty() && equalsIgnoreCase(configured, identity.connector)) {
-      return true;
+  OutputNameMatch outputNameMatch(const OutputIdentity& identity, std::string_view configured) {
+    if (!identity.connector.empty() && outputNamesEqual(configured, identity.connector)) {
+      return OutputNameMatch::Connector;
     }
-    // Nothing beyond the connector to match on. Without this guard every display
-    // with no EDID strings would answer to "Unknown Unknown Unknown".
     if (identity.make.empty() && identity.model.empty() && identity.serial.empty()) {
-      return false;
+      return OutputNameMatch::None;
     }
-    return equalsIgnoreCase(configured, outputDescriptor(identity));
+    return descriptorEquals(identity, configured) ? OutputNameMatch::Descriptor : OutputNameMatch::None;
   }
 
 } // namespace umbriel
