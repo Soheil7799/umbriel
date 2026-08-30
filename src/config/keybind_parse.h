@@ -53,7 +53,9 @@ namespace umbriel {
     WindowMoveOrOutputUp,
     WindowMoveOrOutputDown,
     WindowConsumeLeft,
-    WindowExpelRight,
+    WindowConsumeOrExpelLeft,
+    WindowConsumeRight,
+    WindowConsumeOrExpelRight,
     WindowCycleWidth,
     WindowCycleWidthBack,
     WindowSetWidth,
@@ -124,8 +126,10 @@ namespace umbriel {
     MasterCountDecrease,
     WindowSetHeight,
     WindowModifyHeight,
+    WindowCycleHeight,
+    WindowCycleHeightBack,
     WindowFocusLast,
-    WindowConsumeOrExpel,
+    WorkspaceFocusLast,
     Count,
   };
 

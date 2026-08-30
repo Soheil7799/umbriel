@@ -10,6 +10,7 @@
 #include "output/output.h"
 #include "overview/overview.h"
 #include "server/server.h"
+#include "view/floating.h"
 #include "view/registry.h"
 #include "view/view.h"
 #include "view/xdg_size.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstddef>
 #include <format>
+#include <iterator>
 #include <utility>
 #include "wlr.h"
 // clang-format on
@@ -46,6 +48,49 @@ namespace umbriel {
           .fullscreen = view != nullptr && view->layoutFullscreen(),
           .maximizedToEdges = view != nullptr && view->maximizedToEdges(),
       };
+    }
+
+    struct NamedScrollingColumnPlacement {
+      size_t column = 0;
+      int row = 0;
+    };
+
+    std::optional<NamedScrollingColumnPlacement> namedScrollingColumnPlacement(
+        const ScrollingLayout& layout, const View* joining, std::string_view name, std::optional<int> order
+    ) {
+      if (name.empty()) {
+        return std::nullopt;
+      }
+      const auto& columns = layout.columns();
+      for (size_t columnIndex = 0; columnIndex < columns.size(); ++columnIndex) {
+        const Column& column = columns[columnIndex];
+        const auto anchor = std::ranges::find_if(column.views, [&](const View* existing) {
+          return existing != joining
+              && existing->namedScrollingColumnName()
+              && *existing->namedScrollingColumnName() == name;
+        });
+        if (anchor == column.views.end()) {
+          continue;
+        }
+
+        const auto before = order
+            ? std::ranges::find_if(
+                  column.views,
+                  [&](const View* existing) {
+                    const std::optional<int> existingOrder = existing->namedScrollingColumnOrder();
+                    return existing != joining
+                        && existing->namedScrollingColumnName()
+                        && *existing->namedScrollingColumnName() == name
+                        && (!existingOrder || *existingOrder > *order);
+                  }
+              )
+            : column.views.end();
+        return NamedScrollingColumnPlacement{
+            .column = columnIndex,
+            .row = static_cast<int>(std::distance(column.views.begin(), before)),
+        };
+      }
+      return std::nullopt;
     }
   } // namespace
 
@@ -247,9 +292,19 @@ namespace umbriel {
     if (view == nullptr || !view->mapped() || !view->tiled() || m_layout->columnOf(view) >= 0) {
       return;
     }
-    const int index = layoutAttachIndex(view);
-    m_layout->insertView(view, index);
-    if (ScrollingLayout* scrolling = scrollingLayout(); scrolling != nullptr) {
+    ScrollingLayout* scrolling = scrollingLayout();
+    const std::optional<std::string>& name = view->namedScrollingColumnName();
+    const std::optional<NamedScrollingColumnPlacement> placement = scrolling != nullptr && name
+        ? namedScrollingColumnPlacement(*scrolling, view, *name, view->namedScrollingColumnOrder())
+        : std::nullopt;
+    view->m_ownsNamedScrollingColumnWidth = scrolling != nullptr && name.has_value() && !placement;
+    if (placement) {
+      scrolling->insertViewIntoColumn(view, static_cast<int>(placement->column), placement->row);
+    } else {
+      m_layout->insertView(view, layoutAttachIndex(view));
+    }
+
+    if (scrolling != nullptr && !placement) {
       const int column = scrolling->columnOf(view);
       const std::optional<double> configuredWidth =
           initialWidth ? initialWidth : m_layoutConfig.scrolling.defaultWidthFraction;
@@ -266,16 +321,24 @@ namespace umbriel {
     }
     markArrange(true);
   }
-  Layout::InitialSize Workspace::initialMaximizedSize(View* view, const wlr_box& usable) const {
+
+  std::unique_ptr<Layout> Workspace::previewLayout() const {
     LayoutCapture capture = m_layout->captureState();
     std::unique_ptr<Layout> preview = createLayout(m_layout->mode());
     preview->setConfig(&m_layoutConfig);
     preview->setConstraints(&viewLayoutConstraints);
     if (capture.snapshot == nullptr || !preview->restoreState(*capture.snapshot, capture.members)) {
-      kLog.error("failed to restore layout while resolving initial maximized size");
+      kLog.error("failed to restore layout preview");
+      return nullptr;
+    }
+    return preview;
+  }
+
+  Layout::InitialSize Workspace::initialMaximizedSize(View* view, const wlr_box& usable) const {
+    std::unique_ptr<Layout> preview = previewLayout();
+    if (preview == nullptr) {
       return m_layout->initialSize(usable, 1.0, m_focusedView);
     }
-
     preview->insertView(view, layoutAttachIndex(view));
     const int column = preview->columnOf(view);
     if (column >= 0 && !preview->isFullWidth(column)) {
@@ -284,6 +347,110 @@ namespace umbriel {
     preview->arrange(usable);
     const wlr_box target = preview->targetBox(view);
     return {.width = target.width, .height = target.height};
+  }
+
+  std::optional<Layout::InitialSize> Workspace::initialNamedScrollingColumnSize(
+      View* view, const wlr_box& usable, std::string_view group, std::optional<int> order, bool maximized
+  ) const {
+    const ScrollingLayout* scrolling = scrollingLayout();
+    if (view == nullptr || scrolling == nullptr) {
+      return std::nullopt;
+    }
+    const std::optional<NamedScrollingColumnPlacement> placement =
+        namedScrollingColumnPlacement(*scrolling, view, group, order);
+    if (!placement) {
+      return std::nullopt;
+    }
+
+    std::unique_ptr<Layout> basePreview = previewLayout();
+    auto* preview = dynamic_cast<ScrollingLayout*>(basePreview.get());
+    if (preview == nullptr) {
+      return std::nullopt;
+    }
+    if (placement->column >= preview->columns().size()) {
+      return std::nullopt;
+    }
+    const int column = static_cast<int>(placement->column);
+    preview->insertViewIntoColumn(view, column, placement->row);
+    if (maximized && !preview->isFullWidth(column)) {
+      preview->toggleFullWidth(column);
+    }
+    preview->arrange(usable);
+    const wlr_box target = preview->targetBox(view);
+    return Layout::InitialSize{.width = target.width, .height = target.height};
+  }
+
+  void Workspace::applyNamedScrollingColumnRule(
+      View* view, std::optional<double> initialWidth, NamedScrollingColumnChange change
+  ) {
+    ScrollingLayout* scrolling = scrollingLayout();
+    if (view == nullptr
+        || !view->mapped()
+        || !view->tiled()
+        || scrolling == nullptr
+        || !view->namedScrollingColumnName()) {
+      return;
+    }
+    const std::string& name = *view->namedScrollingColumnName();
+    const auto restoreMaximizedColumn = [&] {
+      const int column = scrolling->columnOf(view);
+      if (column >= 0
+          && view->toplevel()->scheduled.maximized
+          && !view->maximizedToEdges()
+          && !scrolling->isFullWidth(column)) {
+        scrolling->toggleFullWidth(column);
+      }
+    };
+    std::optional<NamedScrollingColumnPlacement> placement =
+        namedScrollingColumnPlacement(*scrolling, view, name, view->namedScrollingColumnOrder());
+    switch (change) {
+    case NamedScrollingColumnChange::Name:
+      view->m_ownsNamedScrollingColumnWidth = !placement;
+      break;
+    case NamedScrollingColumnChange::Order:
+      if (placement && static_cast<int>(placement->column) != scrolling->columnOf(view)) {
+        return;
+      }
+      break;
+    }
+    if (!placement) {
+      if (change == NamedScrollingColumnChange::Order) {
+        return;
+      }
+      const int previousColumn = scrolling->columnOf(view);
+      if (previousColumn < 0 || scrolling->columns()[static_cast<size_t>(previousColumn)].views.size() == 1) {
+        return;
+      }
+
+      // A late identity change can move a member from an established group to
+      // a new one. Start that group in its own adjacent column.
+      detachFromLayout(view);
+      scrolling->insertView(view, previousColumn + 1);
+      if (initialWidth) {
+        scrolling->setWidthFraction(scrolling->columnOf(view), *initialWidth);
+      }
+      restoreMaximizedColumn();
+      clampScrollToRange();
+      ensureFocusedVisible();
+      markArrange(true);
+      return;
+    }
+
+    const int previousColumn = scrolling->columnOf(view);
+    detachFromLayout(view);
+    placement = namedScrollingColumnPlacement(*scrolling, view, name, view->namedScrollingColumnOrder());
+    if (!placement) {
+      // The earlier lookup found another member. Preserve a valid layout if a
+      // future detach path ever removes more than the joining view.
+      scrolling->insertView(view, std::clamp(previousColumn, 0, static_cast<int>(scrolling->columns().size())));
+      kLog.error("named scrolling column '{}' disappeared while moving a view", name);
+    } else {
+      scrolling->insertViewIntoColumn(view, static_cast<int>(placement->column), placement->row);
+    }
+    restoreMaximizedColumn();
+    clampScrollToRange();
+    ensureFocusedVisible();
+    markArrange(true);
   }
 
   void Workspace::layoutDetach(View* view, bool animate) {
@@ -297,13 +464,26 @@ namespace umbriel {
   }
 
   int Workspace::scrollViewportExtent() const {
-    if (m_group == nullptr || m_group->output() == nullptr) {
-      return 1;
-    }
-    const wlr_box usable = m_group->output()->usableArea();
+    const wlr_box usable = tiledArea();
     const int extent = scrollingVertical() ? usable.height : usable.width;
     return std::max(1, extent - 2 * m_layoutConfig.edgePad);
   }
+
+  wlr_box Workspace::usableArea() const {
+    if (m_group == nullptr || m_group->output() == nullptr) {
+      return {};
+    }
+    Output* output = m_group->output();
+    wlr_box area = output->usableArea();
+    if (area.width <= 0 || area.height <= 0) {
+      area = output->layoutBox();
+    }
+    return area;
+  }
+
+  wlr_box Workspace::tiledArea() const { return applyLayoutStruts(usableArea(), m_layoutConfig.struts); }
+
+  wlr_box Workspace::presentedTiledBox(const View* view) const { return tiledTargetBox(view, usableArea()); }
 
   void Workspace::detachFromLayout(View* view) {
     ScrollingLayout* scrolling = scrollingLayout();
@@ -363,7 +543,7 @@ namespace umbriel {
       return;
     }
 
-    m_layout->arrange(usable);
+    m_layout->arrange(applyLayoutStruts(usable, m_layoutConfig.struts));
     // The map-time IPC event can fire before this arrange runs, leaving the previous window positions in the listing.
     // Re-emit now that the layout boxes are settled; the event coalescer caps this at one per frame.
     m_group->server()->scheduleIpcWindowsEvent();
@@ -551,18 +731,13 @@ namespace umbriel {
     }
     if (scrollingLayout() != nullptr) {
       const bool vertical = scrollingVertical();
-      const int usablePrimary = vertical ? usable.height : usable.width;
-      const int layoutPrimary = vertical ? target.height : target.width;
+      const wlr_box tiled = applyLayoutStruts(usable, m_layoutConfig.struts);
       if (vertical) {
         target.x = usable.x;
-        if (layoutPrimary < usablePrimary) {
-          target.y -= m_layoutConfig.edgePad;
-        }
+        target.y = usable.y + target.y - tiled.y;
       } else {
         target.y = usable.y;
-        if (layoutPrimary < usablePrimary) {
-          target.x -= m_layoutConfig.edgePad;
-        }
+        target.x = usable.x + target.x - tiled.x;
       }
     } else {
       target.x = usable.x;
@@ -777,8 +952,8 @@ namespace umbriel {
     return true;
   }
 
-  bool Workspace::consumeFocusedLeft() {
-    if (!m_layout->consumeLeft(m_focusedView)) {
+  bool Workspace::consumeFocused(int direction) {
+    if (!m_layout->consume(m_focusedView, direction)) {
       return false;
     }
     ensureFocusedVisible();
@@ -786,8 +961,8 @@ namespace umbriel {
     return true;
   }
 
-  bool Workspace::expelFocusedRight() {
-    if (!m_layout->expelRight(m_focusedView)) {
+  bool Workspace::expelFocused(int direction) {
+    if (!m_layout->expel(m_focusedView, direction)) {
       return false;
     }
     ensureFocusedVisible();
@@ -840,7 +1015,63 @@ namespace umbriel {
     return true;
   }
 
+  std::optional<double> Workspace::focusedFloatingFraction(bool width) const {
+    View* view = m_focusedView;
+    if (view == nullptr || !view->mapped() || !view->floating()) {
+      return std::nullopt;
+    }
+    const wlr_box usable = view->floatingUsableArea();
+    const auto [basisWidth, basisHeight] = view->floatingSize();
+    const int basis = width ? basisWidth : basisHeight;
+    const int extent = width ? usable.width : usable.height;
+    if (extent <= 0 || basis <= 0) {
+      return std::nullopt;
+    }
+    return floatingSizeFraction(basis, extent);
+  }
+
+  bool
+  Workspace::resizeFocusedFloating(const std::optional<double>& widthFrac, const std::optional<double>& heightFrac) {
+    View* view = m_focusedView;
+    if (view == nullptr || !view->mapped() || !view->floating()) {
+      return false;
+    }
+    const wlr_xdg_toplevel* toplevel = view->toplevel();
+    if (toplevel->current.fullscreen || toplevel->scheduled.fullscreen) {
+      // A fullscreen configure outranks the request, and adoptFloatingClientSize
+      // refuses to retire it, so the resize would only strand a pending serial.
+      return false;
+    }
+    const wlr_box usable = view->floatingUsableArea();
+    if (usable.width <= 0 || usable.height <= 0) {
+      return false;
+    }
+    const XdgSizeHints hints = xdgSizeHints(toplevel);
+    const auto [basisWidth, basisHeight] = view->floatingSize();
+    const int width = widthFrac ? clampXdgWidth(floatingFractionSize(*widthFrac, usable.width), hints) : basisWidth;
+    const int height =
+        heightFrac ? clampXdgHeight(floatingFractionSize(*heightFrac, usable.height), hints) : basisHeight;
+    if (width <= 0 || height <= 0) {
+      return false;
+    }
+    // A maximized float that keeps its state would snap back to the pre-maximize
+    // box on the next toggle, discarding this size.
+    view->dropMaximizedForResize();
+    view->requestFloatingSize(width, height);
+    // Resize in place: the keep-visible clamp runs at commit, once the
+    // geometry is no longer stale (adoptFloatingClientSize).
+    return true;
+  }
+
   bool Workspace::cycleFocusedWidth(int direction) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      if (const auto current = focusedFloatingFraction(true)) {
+        return resizeFocusedFloating(
+            nextFractionPreset(m_layoutConfig.widthPresets, *current, direction), std::nullopt
+        );
+      }
+      return false;
+    }
     if (m_focusedView != nullptr && m_focusedView->maximizedToEdges()) {
       m_focusedView->setMaximizedToEdges(false);
     }
@@ -854,7 +1085,34 @@ namespace umbriel {
     return true;
   }
 
+  bool Workspace::cycleFocusedHeight(int direction) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      if (const auto current = focusedFloatingFraction(false)) {
+        return resizeFocusedFloating(
+            std::nullopt, nextFractionPreset(m_layoutConfig.widthPresets, *current, direction)
+        );
+      }
+      return false;
+    }
+    if (m_focusedView != nullptr && m_focusedView->maximizedToEdges()) {
+      m_focusedView->setMaximizedToEdges(false);
+    }
+    const double current = m_layout->heightFraction(m_focusedView);
+    if (!m_layout->setHeightFraction(
+            m_focusedView, nextFractionPreset(m_layoutConfig.widthPresets, current, direction)
+        )) {
+      return false;
+    }
+    wlr_xdg_toplevel_set_maximized(m_focusedView->toplevel(), false);
+    ensureFocusedVisible();
+    markArrange();
+    return true;
+  }
+
   bool Workspace::setFocusedWidth(double fraction) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      return resizeFocusedFloating(std::clamp(fraction, 0.1, 1.0), std::nullopt);
+    }
     if (m_focusedView != nullptr && m_focusedView->maximizedToEdges()) {
       m_focusedView->setMaximizedToEdges(false);
     }
@@ -869,6 +1127,9 @@ namespace umbriel {
   }
 
   bool Workspace::setFocusedHeight(double fraction) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      return resizeFocusedFloating(std::nullopt, std::clamp(fraction, 0.1, 1.0));
+    }
     if (m_focusedView != nullptr && m_focusedView->maximizedToEdges()) {
       m_focusedView->setMaximizedToEdges(false);
     }
@@ -895,6 +1156,12 @@ namespace umbriel {
   }
 
   bool Workspace::modifyFocusedWidth(double delta) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      if (const auto current = focusedFloatingFraction(true)) {
+        return resizeFocusedFloating(std::clamp(*current + delta, 0.1, 1.0), std::nullopt);
+      }
+      return false;
+    }
     const int column = m_layout->columnOf(m_focusedView);
     if (column < 0) {
       return false;
@@ -905,6 +1172,12 @@ namespace umbriel {
   }
 
   bool Workspace::modifyFocusedHeight(double delta) {
+    if (m_focusedView != nullptr && m_focusedView->floating()) {
+      if (const auto current = focusedFloatingFraction(false)) {
+        return resizeFocusedFloating(std::nullopt, std::clamp(*current + delta, 0.1, 1.0));
+      }
+      return false;
+    }
     // Clamp here, not in the layouts: DwindleLayout does not clamp the overall
     // fraction, and every layout must land in [0.1, 1.0].
     return setFocusedHeight(std::clamp(m_layout->heightFraction(m_focusedView) + delta, 0.1, 1.0));
@@ -913,6 +1186,18 @@ namespace umbriel {
   bool Workspace::toggleFocusedFullWidth() {
     if (m_focusedView != nullptr && m_focusedView->maximizedToEdges()) {
       m_focusedView->setMaximizedToEdges(false);
+    }
+    if (m_focusedView != nullptr && m_focusedView->mapped() && m_focusedView->floating()) {
+      // A float owns no column, so the full-width analogue is filling the usable
+      // area, matching what default_maximize gives a float at map time.
+      // Fullscreen already covers the output and owns the geometry: toggling
+      // under it would capture a fullscreen-sized restore box and leave the
+      // maximized flag inverted once fullscreen is dropped.
+      if (m_focusedView->toplevel()->scheduled.fullscreen) {
+        return false;
+      }
+      m_focusedView->toggleMaximized();
+      return true;
     }
     const int column = m_layout->columnOf(m_focusedView);
     if (column < 0) {
@@ -1083,10 +1368,20 @@ namespace umbriel {
   }
 
   void Workspace::applyLayoutConfig(ResolvedLayoutConfig layoutConfig) {
+    const bool centerFocusedChanged = m_layoutConfig.scrolling.centerFocused != layoutConfig.scrolling.centerFocused;
+    const bool strutsChanged = m_layoutConfig.struts != layoutConfig.struts;
     m_layoutConfig = std::move(layoutConfig);
     if (m_layout != nullptr && m_layout->mode() == m_layoutConfig.mode) {
       m_layout->setConfig(&m_layoutConfig);
       m_layout->setConstraints(&viewLayoutConstraints);
+      if (ScrollingLayout* scrolling = scrollingLayout(); scrolling != nullptr) {
+        const int focusedColumn = m_focusedView != nullptr ? scrolling->columnOf(m_focusedView) : -1;
+        if ((centerFocusedChanged || strutsChanged) && focusedColumn >= 0) {
+          scrolling->reconcileFocusedColumn(focusedColumn, scrollViewportExtent());
+        } else if (centerFocusedChanged || strutsChanged) {
+          clampScrollToRange();
+        }
+      }
       markArrange(true);
       return;
     }

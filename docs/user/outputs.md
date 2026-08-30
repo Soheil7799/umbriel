@@ -133,7 +133,7 @@ With `"fullscreen"`, switching away from the fullscreen workspace, leaving
 fullscreen, or closing the window disables VRR again.
 
 A focused window can override this output policy with the window-rule `vrr`
-key. See [window rules](rules.md#settings-updated-while-a-window-is-open).
+key. See [window rules](window-rules.md#settings-updated-while-a-window-is-open).
 
 ```toml
 [output.DP-1]
@@ -174,8 +174,8 @@ tearing` to inspect the client hint, resolved rule, eligibility, last submitted
 page-flip mode, presentation result, and any fallback reason. Use `umbriel
 tearing --json` for machine-readable diagnostics.
 
-See [window rules](rules.md#settings-updated-while-a-window-is-open) for per-window
-overrides.
+See [window rules](window-rules.md#settings-updated-while-a-window-is-open)
+for per-window overrides.
 
 ### HDR
 
@@ -309,24 +309,6 @@ requests itself.
 Requests that disable an output through this protocol are rejected: the
 protocol commit would bypass the layout and overview handling that the config
 `enabled` key performs. Use `enabled = false` instead.
-
-## Moving focus and windows between outputs
-
-`output-focus-left/right/up/down` move keyboard focus to the adjacent
-monitor in that direction. `window-move-to-output-*` and
-`column-move-to-output-*` move the focused window, or its whole column, to
-the adjacent monitor's active workspace. `workspace-move-to-output-*` instead
-creates a new workspace on the adjacent monitor and moves every window of the
-active workspace into it, preserving column order and widths. See
-[Actions](actions.md) for the full list and their exact semantics.
-
-Whole-column moves between scrolling workspaces retain member order, width,
-full-width restore state, and stacked row proportions. A destination using the
-dwindle layout flattens the moved stack into ordered single-window columns.
-
-Direction is determined from output centers in logical layout coordinates.
-Small overlaps caused by fractional scaling and coordinate rounding therefore
-do not prevent vertically or horizontally arranged outputs from being found.
 
 ## Multi-monitor example
 

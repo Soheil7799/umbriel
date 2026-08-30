@@ -105,8 +105,8 @@ UMBRIEL_TEST(batchInsertWithoutArrangeKeepsEveryView) {
 }
 
 UMBRIEL_TEST(swapOperationsRefreshTheColumnMapping) {
-  // consumeLeft, expelRight, moveViewVertical, and moveColumn reassign leaf views. The column mapping must be current
-  // straight afterwards, without waiting for the next arrange().
+  // Horizontal consume, expel, vertical movement, and column movement reassign leaf views. The column mapping must be
+  // current straight afterwards, without waiting for the next arrange().
   Fixture fixture;
   fixture.addLeaves(2);
   const int first = fixture.layout.columnOf(stub(0));
@@ -117,6 +117,33 @@ UMBRIEL_TEST(swapOperationsRefreshTheColumnMapping) {
   fixture.layout.moveColumn(first, second);
   CHECK_EQ(fixture.layout.columnOf(stub(0)), second);
   CHECK_EQ(fixture.layout.columnOf(stub(1)), first);
+}
+
+UMBRIEL_TEST(horizontalConsumeSwapsWithTheVisualNeighbor) {
+  Fixture fixture;
+  fixture.addLeaves(3);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box leftSlot = fixture.layout.targetBox(stub(0));
+  const wlr_box bottomRightSlot = fixture.layout.targetBox(stub(2));
+  CHECK(leftSlot.x < bottomRightSlot.x);
+  CHECK(fixture.layout.consume(stub(2), -1));
+  CHECK_EQ(fixture.layout.targetBox(stub(2)).x, leftSlot.x);
+  CHECK_EQ(fixture.layout.targetBox(stub(2)).y, leftSlot.y);
+  CHECK_EQ(fixture.layout.targetBox(stub(0)).x, bottomRightSlot.x);
+  CHECK_EQ(fixture.layout.targetBox(stub(0)).y, bottomRightSlot.y);
+}
+
+UMBRIEL_TEST(horizontalExpelDoesNotSwapWithAVerticalNeighbor) {
+  Fixture fixture;
+  fixture.addLeaves(3);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box topRight = fixture.layout.targetBox(stub(1));
+  const wlr_box bottomRight = fixture.layout.targetBox(stub(2));
+  CHECK_EQ(topRight.x, bottomRight.x);
+  CHECK(topRight.y < bottomRight.y);
+  CHECK(!fixture.layout.expel(stub(1), 1));
 }
 
 UMBRIEL_TEST(swapViewsAcrossLeavesKeepsGeometryWithTheSlots) {
